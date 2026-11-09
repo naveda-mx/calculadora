@@ -2,12 +2,15 @@ from datetime import date
 
 import streamlit as st
 
-
+#Configuración inicial de la página 
 st.set_page_config(page_title="Información de referencia", layout="centered")
 
 st.title("Calculadora de intereses")
 st.subheader("Información de referencia")
 st.caption("Captura manual de un préstamo. Todos los campos son editables.")
+
+
+#Configuración de formulario 
 
 with st.form("formulario_referencia", clear_on_submit=False):
     izquierda, derecha = st.columns(2)
@@ -18,9 +21,10 @@ with st.form("formulario_referencia", clear_on_submit=False):
 
     nombre_cliente = st.text_input("Nombre del cliente", key="nombre_cliente")
 
+    
     izquierda, derecha = st.columns(2)
     with izquierda:
-        disposicion = st.text_input("Disposición (Disp.)", key="disposicion")
+        disposicion = st.text_input("Disposición", key="disposicion")
         agencia = st.text_input("Agencia", key="agencia")
         monto_operado = st.number_input(
             "Monto operado",
@@ -47,6 +51,8 @@ with st.form("formulario_referencia", clear_on_submit=False):
             help="Indica la moneda del monto operado.",
         )
 
+# Los datos obligatorios son ID préstamo y cliente 
+    
     st.caption("* Campos obligatorios para revisar la captura.")
     revisar = st.form_submit_button("Revisar información")
 
