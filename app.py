@@ -6,36 +6,17 @@ import streamlit as st
 from calculos import calcular_vencimiento
 
 
-st.set_page_config(page_title="Calculadora de intereses", layout="centered")
+st.set_page_config(page_title="Calculadora de intereses", layout="wide")
 
 st.title("Calculadora de intereses")
 st.subheader("Información de referencia")
 st.caption("Captura manual de un préstamo. Los datos de identificación son opcionales.")
 
 with st.form("formulario_referencia", clear_on_submit=False):
-    izquierda, derecha = st.columns(2)
+    izquierda, centro, derecha = st.columns([1, 1, 2])
     with izquierda:
         id_cliente = st.text_input("ID de cliente", key="id_cliente")
-    with derecha:
-        id_prestamo = st.text_input("ID de préstamo", key="id_prestamo")
-
-    nombre_cliente = st.text_input("Nombre del cliente", key="nombre_cliente")
-
-    izquierda, derecha = st.columns(2)
-    with izquierda:
-        disposicion = st.text_input("Disposición (Disp.)", key="disposicion")
         agencia = st.text_input("Agencia", key="agencia")
-        monto_operado = st.number_input(
-            "Monto operado *",
-            min_value=0.0,
-            value=None,
-            step=0.01,
-            format="%.2f",
-            key="monto_operado",
-            help="Capital sobre el que se calcula el interés durante todo el período.",
-        )
-    with derecha:
-        subaplicacion = st.text_input("Subaplicación", key="subaplicacion")
         fecha_operacion = st.date_input(
             "Fecha de operación",
             value=None,
@@ -44,26 +25,34 @@ with st.form("formulario_referencia", clear_on_submit=False):
             format="DD/MM/YYYY",
             key="fecha_operacion",
         )
+    with centro:
+        id_prestamo = st.text_input("ID de préstamo", key="id_prestamo")
+        subaplicacion = st.text_input("Subaplicación", key="subaplicacion")
         moneda = st.text_input(
             "Moneda",
             placeholder="Por ejemplo: MXN",
             key="moneda",
-            help="Indica la moneda del monto operado.",
+            help="Indica la moneda del préstamo y de los importes calculados.",
         )
+    with derecha:
+        nombre_cliente = st.text_input("Nombre del cliente", key="nombre_cliente")
+        disposicion = st.text_input("Disposición (Disp.)", key="disposicion")
 
     st.subheader("Condiciones del cálculo")
     st.caption(
         "Captura las tasas anuales en porcentaje, con hasta seis decimales. "
         "Por ejemplo, escribe 6.8 para 6.8 %."
     )
-    izquierda, derecha = st.columns(2)
+    izquierda, centro, derecha = st.columns(3)
     with izquierda:
-        tasa_base = st.number_input(
-            "Tasa base anual (%) *",
+        saldo_insoluto = st.number_input(
+            "Saldo insoluto *",
+            min_value=0.0,
             value=None,
-            step=0.0001,
-            format="%.6f",
-            key="tasa_base",
+            step=0.01,
+            format="%.2f",
+            key="saldo_insoluto",
+            help="Capital pendiente de pago sobre el que se calcula el interés del período.",
         )
         fecha_inicio = st.date_input(
             "Fecha de inicio *",
@@ -72,6 +61,22 @@ with st.form("formulario_referencia", clear_on_submit=False):
             max_value=date.max,
             format="DD/MM/YYYY",
             key="fecha_inicio",
+        )
+    with centro:
+        tasa_base = st.number_input(
+            "Tasa base anual (%) *",
+            value=None,
+            step=0.0001,
+            format="%.6f",
+            key="tasa_base",
+        )
+        fecha_fin = st.date_input(
+            "Fecha final *",
+            value=None,
+            min_value=date.min,
+            max_value=date.max,
+            format="DD/MM/YYYY",
+            key="fecha_fin",
         )
     with derecha:
         spread = st.number_input(
@@ -82,27 +87,18 @@ with st.form("formulario_referencia", clear_on_submit=False):
             key="spread",
             help="Se suma a la tasa base. Por ejemplo, 6.8 + 2.85 = 9.65 % anual.",
         )
-        fecha_fin = st.date_input(
-            "Fecha final *",
-            value=None,
-            min_value=date.min,
-            max_value=date.max,
-            format="DD/MM/YYYY",
-            key="fecha_fin",
+        amortizacion = st.number_input(
+            "Amortización de este vencimiento",
+            min_value=0.0,
+            value=0.0,
+            step=0.01,
+            format="%.2f",
+            key="amortizacion",
+            help="Abono a capital en la moneda del préstamo. Para el pago de fin de año, "
+                 "captura el importe programado. Usa cero en los períodos sin amortización.",
         )
-
-    amortizacion = st.number_input(
-        "Amortización de este vencimiento",
-        min_value=0.0,
-        value=0.0,
-        step=0.01,
-        format="%.2f",
-        key="amortizacion",
-        help="Abono a capital en la moneda del préstamo. Para el pago de fin de año, "
-             "captura el importe programado. Usa cero en los períodos sin amortización.",
-    )
     st.caption(
-        "Interés simple con monto y tasa constantes durante el período. "
+        "Interés simple con saldo insoluto y tasa constantes durante el período. "
         "Días naturales = fecha final − fecha de inicio. Base de 360 días. "
         "El interés diario se redondea a dos decimales antes de multiplicar por los días."
     )
@@ -111,7 +107,7 @@ with st.form("formulario_referencia", clear_on_submit=False):
 
 if revisar:
     obligatorios = {
-        "monto operado": monto_operado,
+        "saldo insoluto": saldo_insoluto,
         "tasa base": tasa_base,
         "spread": spread,
         "fecha de inicio": fecha_inicio,
@@ -125,7 +121,7 @@ if revisar:
     else:
         try:
             resultado = calcular_vencimiento(
-                monto_operado, tasa_base, spread, fecha_inicio, fecha_fin, amortizacion
+                saldo_insoluto, tasa_base, spread, fecha_inicio, fecha_fin, amortizacion
             )
         except ValueError as error:
             st.warning(str(error))
@@ -142,7 +138,7 @@ if revisar:
             "agencia": agencia.strip(),
             "subaplicacion": subaplicacion.strip(),
             "fecha_operacion": fecha_operacion,
-            "monto_operado": monto_operado,
+            "saldo_insoluto": saldo_insoluto,
             "moneda": moneda.strip(),
         }
 
@@ -159,8 +155,8 @@ if revisar:
                 if fecha_operacion is not None else "",
             ),
             (
-                "Monto operado",
-                f"{monto_operado:,.2f}" if monto_operado is not None else "",
+                "Saldo insoluto",
+                f"{saldo_insoluto:,.2f}",
             ),
             ("Moneda", referencia["moneda"]),
             ("Fecha de inicio", fecha_inicio.strftime("%d/%m/%Y")),
@@ -184,7 +180,7 @@ if revisar:
                 {"Campo": campo, "Valor": valor or "Sin capturar"}
                 for campo, valor in campos
             ])
-            st.write("Interés diario = redondear(monto operado × (tasa base + spread) / 100 / 360, 2).")
+            st.write("Interés diario = redondear(saldo insoluto × (tasa base + spread) / 100 / 360, 2).")
             st.write("Interés del período = interés diario × días naturales.")
         st.caption("Para reflejar cambios, vuelve a pulsar «Calcular interés y vencimiento».")
 
