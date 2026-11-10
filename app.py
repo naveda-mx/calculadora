@@ -40,7 +40,7 @@ with st.form("formulario_referencia", clear_on_submit=False):
 
     st.subheader("Condiciones del cálculo")
     st.caption(
-        "Captura las tasas anuales en porcentaje, con hasta seis decimales. "
+        "Captura las tasas anuales en porcentaje, con hasta cuatro decimales. "
         "Por ejemplo, escribe 6.8 para 6.8 %."
     )
     izquierda, centro, derecha = st.columns(3)
@@ -80,7 +80,7 @@ with st.form("formulario_referencia", clear_on_submit=False):
         )
     with derecha:
         spread = st.number_input(
-            "Spread anual (puntos porcentuales) *",
+            "Spread anual *",
             value=None,
             step=0.0001,
             format="%.6f",
@@ -163,7 +163,7 @@ if revisar:
             ("Fecha final", fecha_fin.strftime("%d/%m/%Y")),
             ("Días del período", str(resultado["dias"])),
             ("Tasa base anual", f"{tasa_base:.6f} %"),
-            ("Spread anual", f"{spread:.6f} puntos porcentuales"),
+            ("Spread anual", f"{spread:.6f} %"),
             ("Tasa total anual", f"{resultado['tasa_total']:.6f} %"),
             ("Interés diario redondeado", f"{resultado['interes_diario']:,.2f}"),
             ("Amortización del vencimiento", f"{resultado['amortizacion']:,.2f}"),
