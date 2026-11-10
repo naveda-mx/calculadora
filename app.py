@@ -36,7 +36,7 @@ with st.form("formulario_referencia", clear_on_submit=False):
         )
     with derecha:
         nombre_cliente = st.text_input("Nombre del cliente", key="nombre_cliente")
-        disposicion = st.text_input("Disposición (Disp.)", key="disposicion")
+        disposicion = st.text_input("Disposición", key="disposicion")
 
     st.subheader("Condiciones del cálculo")
     st.caption(
