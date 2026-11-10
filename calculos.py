@@ -12,7 +12,7 @@ def calcular_vencimiento(
 ):
     """Calcula interés sobre el saldo insoluto con tasas anuales y base 360.
 
-    Sigue el Excel de referencia: redondea el interés diario a centavos antes
+    Redondea el interés diario a centavos antes
     de multiplicar por los días. La amortización corresponde al vencimiento
     del período y se suma al interés monetario.
     """
@@ -31,8 +31,8 @@ def calcular_vencimiento(
         raise ValueError("La fecha final debe ser igual o posterior a la fecha de inicio.")
     if saldo != saldo.quantize(Decimal("0.01")) or abono != abono.quantize(Decimal("0.01")):
         raise ValueError("Captura el saldo insoluto y la amortización con hasta dos decimales.")
-    if base != base.quantize(Decimal("0.000001")) or margen != margen.quantize(Decimal("0.000001")):
-        raise ValueError("Captura la tasa base y el spread con hasta seis decimales.")
+    if base != base.quantize(Decimal("0.0001")) or margen != margen.quantize(Decimal("0.0001")):
+        raise ValueError("Captura la tasa base y el spread con hasta cuatro decimales.")
 
     dias = (fecha_fin - fecha_inicio).days
     tasa_total = base + margen
