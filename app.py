@@ -80,7 +80,7 @@ with st.form("formulario_referencia", clear_on_submit=False):
         )
     with derecha:
         spread = st.number_input(
-            "Spread anual *",
+            "Spread anual (%) *",
             value=None,
             step=0.0001,
             format="%.6f",
