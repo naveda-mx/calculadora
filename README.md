@@ -30,7 +30,7 @@ Las condiciones adicionales se capturan en el formulario:
 | Campo | Captura |
 | --- | --- |
 | Saldo insoluto | Capital pendiente de pago, con hasta dos decimales |
-| Tasa | Captura manual o una de las siete series de Banxico |
+| Tasa | Captura manual o una de las ocho series de Banxico |
 | Tasa base anual | Porcentaje manual, por ejemplo `6.8198`, o valor de Banxico |
 | Spread anual | Puntos porcentuales, por ejemplo `2.85` |
 | Fecha de inicio y fecha final | Fechas del período de intereses |
@@ -40,8 +40,8 @@ Para un crédito con amortización a fin de año, captura cero en los períodos
 sin abono y el importe programado en el período del pago anual. El importe
 se introduce manualmente para cada vencimiento.
 
-El cálculo mantiene el saldo insoluto constante. La tasa base puede ser manual,
-una sola observación de Banxico o la tasa anual equivalente obtenida por tramos:
+En captura manual o **Sin revisión**, el cálculo conserva la fórmula original,
+con una tasa fija y saldo insoluto constante:
 
 ```text
 Días = fecha final − fecha de inicio
@@ -59,7 +59,8 @@ Los montos admiten hasta dos decimales y las tasas hasta seis decimales.
 La fecha final debe ser igual o
 posterior a la inicial y la amortización debe estar entre cero y el saldo insoluto.
 
-El spread se introduce manualmente y se agrega después de obtener la tasa base.
+El spread se introduce manualmente. En la modalidad por tramos sus intereses
+se calculan y redondean por separado sobre el saldo insoluto inicial.
 Seleccionar fondeo no activa composición diaria overnight: la frecuencia elegida
 determina las revisiones. Las tasas compuestas por adelantado se obtienen ya
 calculadas de Banxico; se usan como tasas anuales de los tramos seleccionados.
@@ -67,9 +68,10 @@ calculadas de Banxico; se usan como tasas anuales de los tramos seleccionados.
 ## Cálculo por tramos
 
 Al elegir Banxico aparecen **Frecuencia de revisión** y **Día de revisión**.
-La opción inicial es Mensual, día 15. También hay Bimestral, Trimestral,
+La opción inicial es Mensual, día 15. También hay Diaria, Bimestral, Trimestral,
 Semestral y Anual. **Sin revisión** conserva el cálculo anterior con una sola
-tasa; la captura manual también conserva su fórmula anterior.
+tasa; la captura manual también conserva su fórmula anterior. El día de revisión
+del mes no aplica a la frecuencia diaria.
 
 El calendario de revisiones se ancla al mes de inicio. Para frecuencias de
 varios meses, ese mes define la secuencia (por ejemplo, inicio en junio y
@@ -81,23 +83,63 @@ original, aunque febrero haya utilizado el 28 o 29.
 
 Los tramos incluyen el inicio y excluyen el final. No se agrega una fila de
 cero días al terminar en una revisión. Cada fecha de revisión se ajusta al hábil
-anterior y luego se resta su lookback. Esto sólo afecta la consulta, no los
-días de devengo. Las consultas repetidas se reutilizan. Un dato faltante impide
-mostrar un cálculo parcial. El límite es de 120 tramos por cálculo.
+anterior y luego se resta su lookback. Los días inhábiles no se excluyen del
+devengo. En revisión diaria, la convención elegida determina si se cortan los
+tramos en esos días. Las consultas repetidas se reutilizan. Un dato faltante
+impide mostrar un cálculo parcial. El límite de las frecuencias mensuales y
+mayores es de 120 tramos; para revisión diaria es de 3660 días naturales.
+
+### Revisión diaria y días inhábiles
+
+Selecciona **Diaria** y elige explícitamente una convención de composición;
+no es necesario capturar un día del mes:
+
+- **Días naturales: capitalizar cada día.** Cada día devengado tiene su propio
+  factor. Un sábado, domingo o festivo utiliza la referencia hábil anterior,
+  con el lookback seleccionado. Los factores se multiplican también en esos días.
+- **Días hábiles: capitalizar hasta el siguiente día hábil.** Un factor cubre
+  desde la revisión hábil hasta la siguiente, incluyendo los días inhábiles
+  intermedios. Si el período comienza en un inhábil, se toma la revisión hábil
+  anterior y se cuentan sólo los días desde el inicio del período.
+
+Por ejemplo, del viernes al martes siguiente, con sábado y domingo inhábiles y
+sin otros festivos: la primera convención produce cuatro factores de un día;
+la segunda produce un factor viernes–lunes de tres días y otro lunes–martes de
+un día. En ambas se devengan cuatro días y se aplica el lookback a cada
+referencia. Si la tasa del viernes es `r` en decimal y el lunes es `s`, los
+factores son `(1 + r/360)^3 × (1 + s/360)` y
+`(1 + 3r/360) × (1 + s/360)`, respectivamente. Sus resultados pueden diferir.
+
+Para la revisión diaria la aplicación agrupa las fechas necesarias en una
+consulta de rango al SIE. Verifica cada observación solicitada, no la sustituye
+por otra y muestra un error si falta; los fines de semana se mapean al hábil
+anterior según el calendario seleccionado antes de consultar.
 
 ```text
 Factor del tramo = 1 + tasa anual (%) × días del tramo / 36000
 Rendimiento acumulado = producto de los factores − 1
 Tasa equivalente anual (%) = rendimiento acumulado × 36000 / días totales
-Tasa base = redondear(tasa equivalente anual, 4 decimales)
-Tasa total = tasa base + spread
-Interés = redondear(saldo insoluto × tasa total / 36000, 2) × días totales
+Tasa total de referencia = tasa equivalente anual + spread
+Interés diario de tasa = redondear(base del tramo × tasa del tramo / 36000, 2)
+Interés diario del spread = redondear(saldo insoluto original × spread / 36000, 2)
+Base del siguiente tramo = base actual + interés diario de tasa × días del tramo
+Interés = suma de intereses diarios de tasa y de spread
 Vencimiento = interés + amortización final
 ```
 
 Los factores se muestran con cinco decimales, pero se componen con precisión
-Decimal sin redondeo intermedio. El spread no se compone dentro de cada tramo.
-Las revisiones son de tasa, no abonos intermedios a capital.
+Decimal sin redondeo intermedio; la tasa equivalente se muestra con diez
+decimales, pero se conserva con toda la precisión Decimal. La tasa equivalente
+es teórica: el importe monetario se obtiene calculando cada tramo y redondeando
+por separado los intereses de tasa y spread cada día. Por ello, el interés
+puede diferir en centavos de aplicar directamente la tasa equivalente teórica.
+
+La base de cálculo de la tasa es el saldo original más los intereses de tasa
+capitalizados al final de tramos anteriores; se mantiene fija dentro de cada
+tramo. El spread usa siempre el saldo original y no se capitaliza. La tabla
+**Desglose diario de intereses** muestra la base, intereses separados, total
+diario y acumulado de la tasa. Las revisiones son de tasa, no abonos intermedios
+a capital. Se usa redondeo de mitades alejándose de cero, como REDONDEAR de Excel.
 
 Ejemplo verificado con las tasas de las imágenes proporcionadas:
 
@@ -109,15 +151,29 @@ Ejemplo verificado con las tasas de las imágenes proporcionadas:
 | 15/09/2026 | 15/10/2026 | 30 | 15/09/2026 | 6.7458 % | 1.00562 |
 | 15/10/2026 | 31/10/2026 | 16 | 15/10/2026 | 6.7659 % | 1.00301 |
 
-Con 138 días, la tasa equivalente es 6.8198 %. Al sumar 2.85 puntos de spread,
-la tasa total es 9.6698 %. Con saldo 76,704,742.39 y amortización cero, el interés
-y el vencimiento son 2,843,258.16. Las pruebas usan estas tasas como datos
-simulados; no requieren una consulta real al SIE.
+Con 138 días, la tasa equivalente teórica es aproximadamente 6.8197970459 %.
+Con saldo 76,704,742.39, spread 2.85 % y amortización cero, aplicando el nuevo
+redondeo diario separado por tramo, el interés y vencimiento son 2,843,257.42.
+La versión anterior daba 2,843,258.16 porque primero redondeaba la tasa a cuatro
+decimales y redondeaba conjuntamente tasa más spread; ya no usa esa regla en
+el modo por tramos. Las pruebas usan tasas simuladas, no una consulta real.
+
+Ejemplo de la hoja diaria: saldo `4,278,722,682.86`, spread `1 %`, del
+29/10/2026 al 05/11/2026, revisión diaria en días hábiles, lookback 5 y
+02/11/2026 inhábil. Con las tasas de la imagen 6.53 %, 6.52 % (cuatro días),
+6.51 % y 6.52 %, la tasa equivalente teórica es 6.5225307778 %. El interés de
+tasa es `5,426,575.06` y el spread diario es `118,853.41`, que por siete días
+suma `831,973.87`. El interés total y vencimiento sin amortización son
+`6,258,548.93`. Estas tasas son un ejemplo simulado y no confirman una consulta
+real a Banxico.
 
 ## Tasas disponibles, lookback y calendario
 
 El selector **Tasa** incluye captura manual y estas series oficiales:
 
+- Tasa objetivo de Banxico, serie **SF61745**, solicitada como «TIIE diaria».
+  Banxico la denomina tasa objetivo; es distinta de la TIIE de Fondeo y de la
+  TIIE a 28 días. La aplicación muestra el nombre oficial para evitar confusión.
 - TIIE a 28 días, a 91 días y a 182 días.
 - TIIE de Fondeo a un día.
 - TIIE de Fondeo compuesta por adelantado a 28, 91 y 182 días.
@@ -128,7 +184,9 @@ identificadores del catálogo están documentados en `banxico.py`.
 
 Para consultar una tasa:
 
-1. Captura las fechas de inicio y final, elige la tasa, frecuencia y día de revisión.
+1. Captura las fechas de inicio y final; elige la tasa y la frecuencia. Para
+   revisión diaria selecciona la convención de inhábiles; para las demás
+   frecuencias selecciona el día de revisión del mes.
 2. Elige **Lookback (días hábiles)**. Cero consulta la fecha de referencia si
    es hábil. Se aplica a cada revisión. En **Sin revisión** puedes desmarcar
    **Usar la fecha de inicio como fecha de referencia** para indicar otra fecha.
@@ -149,17 +207,18 @@ La pantalla muestra la fecha objetivo antes de consultar y la fecha del dato
 SIE, serie, valor y hora de descarga después. **Fecha del dato SIE no significa
 necesariamente fecha de publicación**: cada serie tiene su propia convención.
 Revisa las reglas de fijación del contrato al elegir la fecha de referencia.
-El calendario sólo afecta la consulta: el interés sigue contando días
-naturales y la fecha final no se mueve.
+El calendario no descuenta días de interés ni cambia la fecha final. En la
+revisión diaria con composición en días hábiles, además define dónde se
+cierran los tramos para capitalizar el interés de tasa.
 
 Si Banxico no devuelve un dato válido para esa fecha, se muestra un aviso y
 no se calcula con otra observación. No hay sustitución silenciosa por la última
 tasa ni se inventan tasas futuras. La consulta tiene un tiempo máximo de espera
 y mensajes para problemas de conexión, credenciales o límites de servicio.
 Los datos se conservan en caché durante una hora; el botón de actualización
-fuerza nuevas consultas. Cambiar la serie, las fechas, la frecuencia, el día de revisión, el lookback o el calendario
-invalida la tasa mostrada. No hay actualización diaria programada ni histórico
-permanente todavía.
+fuerza nuevas consultas. Cambiar la serie, las fechas, la frecuencia, el día de
+revisión, la convención diaria, el lookback o el calendario invalida la tasa
+mostrada. No hay actualización diaria programada ni histórico permanente todavía.
 
 ## Configura el token de Banxico
 
