@@ -3,7 +3,7 @@
 from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 
 from calendario import fecha_consulta
 
@@ -91,10 +91,11 @@ def generar_tramos(inicio, fin, frecuencia, dia_revision, lookback=0,
 
 
 def componer_tasas(tramos, tasas):
-    """Compone factores sin redondeo intermedio; anualiza y redondea a 4 decimales.
+    """Compone factores y anualiza conservando la precisión Decimal.
 
     Las tasas recibidas están en porcentaje anual. El spread se agrega después
-    a la tasa equivalente redondeada, no dentro de los factores por tramo.
+    fuera de los factores por tramo. La tasa equivalente no se redondea para
+    el cálculo; el redondeo de importes diarios se trata por separado.
     """
     tramos, tasas = list(tramos), list(tasas)
     if not tramos or len(tramos) != len(tasas):
@@ -118,5 +119,5 @@ def componer_tasas(tramos, tasas):
     return {
         "detalle": detalle, "dias": dias, "acumulado": acumulado,
         "periodo": Decimal(360) / dias, "tasa_sin_redondear": anual,
-        "tasa_equivalente": anual.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP),
+        "tasa_equivalente": anual,
     }
