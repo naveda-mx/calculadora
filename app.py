@@ -9,6 +9,7 @@ import streamlit as st
 from banxico import TASAS_BANXICO, CONVENCIONES_FECHA, ErrorBanxico, consultar_tasa
 from calendario import CALENDARIOS_MX, FUENTES_CALENDARIO, fecha_consulta
 from calculos import calcular_vencimiento
+from tramos import FRECUENCIAS, generar_tramos, componer_tasas
 
 
 @st.cache_data(ttl=3600, max_entries=512, show_spinner=False)
@@ -159,17 +160,42 @@ with st.container():
     configuracion = None
     fecha_tasa = None
     error_calendario = None
+    por_tramos = False
+    tramos = []
+    fechas_consulta = []
     if es_banxico:
         st.caption(
             "Plazos oficiales: TIIE a 28, 91 y 182 días; TIIE de Fondeo a un día; "
             "TIIE de Fondeo compuesta por adelantado a 28, 91 y 182 días. "
-            "Se toma una sola tasa anual y se mantiene fija durante todo el período."
+            "Puedes revisar la tasa por tramos o fijar una sola tasa para todo el período."
         )
-        usar_inicio = st.checkbox("Usar la fecha de inicio como fecha de referencia", value=True)
-        fecha_referencia = fecha_inicio if usar_inicio else st.date_input(
-            "Fecha de referencia para fijar la tasa", value=fecha_inicio,
-            min_value=date.min, max_value=date.max, format="DD/MM/YYYY", key="fecha_referencia",
+        izquierda, derecha = st.columns(2)
+        recuperar_captura("frecuencia")
+        frecuencia = izquierda.selectbox(
+            "Frecuencia de revisión", [*FRECUENCIAS, "Sin revisión"], key="frecuencia",
         )
+        conservar_captura("frecuencia")
+        por_tramos = frecuencia != "Sin revisión"
+        recuperar_captura("dia_revision")
+        dia_revision = derecha.number_input(
+            "Día de revisión", min_value=1, max_value=31, value=15, step=1,
+            key="dia_revision", disabled=not por_tramos,
+        )
+        conservar_captura("dia_revision")
+        if por_tramos:
+            fecha_referencia = fecha_inicio
+            st.caption(
+                "Las revisiones se anclan al mes de inicio y se repiten según la frecuencia. "
+                "Si el inicio cae entre revisiones, se usa la revisión anterior para el primer tramo. "
+                "Si el día elegido no existe en un mes, se usa su último día. "
+                "Los cortes son fechas de revisión de tasa; la amortización sigue aplicándose al vencimiento final."
+            )
+        else:
+            usar_inicio = st.checkbox("Usar la fecha de inicio como fecha de referencia", value=True)
+            fecha_referencia = fecha_inicio if usar_inicio else st.date_input(
+                "Fecha de referencia para fijar la tasa", value=fecha_inicio,
+                min_value=date.min, max_value=date.max, format="DD/MM/YYYY", key="fecha_referencia",
+            )
         izquierda, derecha = st.columns(2)
         with izquierda:
             recuperar_captura("calendario")
@@ -224,9 +250,18 @@ with st.container():
         festivos = tuple(sorted({pd.Timestamp(f).date() for f in tabla_festivos["Fecha inhábil"].dropna()}))
         if fecha_referencia is not None:
             try:
-                fecha_tasa = fecha_consulta(fecha_referencia, lookback, dias_semana, festivos)
+                if por_tramos:
+                    tramos = generar_tramos(
+                        fecha_inicio, fecha_fin, frecuencia, dia_revision, lookback, dias_semana, festivos,
+                    )
+                    fechas_consulta = list(dict.fromkeys(t.consulta for t in tramos))
+                    ultima_referencia = tramos[-1].referencia
+                else:
+                    fecha_tasa = fecha_consulta(fecha_referencia, lookback, dias_semana, festivos)
+                    fechas_consulta = [fecha_tasa]
+                    ultima_referencia = fecha_referencia
                 if calendario == "Bancario de México":
-                    sin_cobertura = set(range(fecha_tasa.year, fecha_referencia.year + 1)) - set(CALENDARIOS_MX)
+                    sin_cobertura = set(range(min(fechas_consulta).year, ultima_referencia.year + 1)) - set(CALENDARIOS_MX)
                     if sin_cobertura:
                         raise ValueError(
                             "No hay calendario bancario precargado para "
@@ -235,9 +270,20 @@ with st.container():
                         )
                 configuracion = (
                     serie_id, fecha_referencia, lookback, tuple(sorted(dias_semana)),
-                    festivos, calendario, fecha_tasa,
+                    festivos, calendario, tuple(fechas_consulta), frecuencia,
+                    dia_revision if por_tramos else None, fecha_fin if por_tramos else None,
                 )
-                st.info(f"Fecha de tasa a consultar: {fecha_tasa:%d/%m/%Y}.")
+                if por_tramos:
+                    st.info(f"{len(tramos)} tramos · {(fecha_fin - fecha_inicio).days} días naturales.")
+                    with st.expander("Ver fechas de revisión y consulta"):
+                        st.table([{
+                            "Inicio": t.inicio.strftime("%d/%m/%Y"),
+                            "Final": t.fin.strftime("%d/%m/%Y"), "Días": t.dias,
+                            "Revisión": t.referencia.strftime("%d/%m/%Y"),
+                            "Consulta con lookback": t.consulta.strftime("%d/%m/%Y"),
+                        } for t in tramos])
+                else:
+                    st.info(f"Fecha de tasa a consultar: {fecha_tasa:%d/%m/%Y}.")
             except ValueError as error:
                 error_calendario = str(error)
                 st.warning(error_calendario)
@@ -255,12 +301,15 @@ with st.container():
     registro = st.session_state.get("consulta_banxico")
     if registro and (
         registro["configuracion"] != configuracion
-        or (datetime.now(timezone.utc) - registro["observacion"].consultada_en).total_seconds() >= 3600
+        or any((datetime.now(timezone.utc) - o.consultada_en).total_seconds() >= 3600
+               for o in registro["observaciones"].values())
     ):
         st.session_state.pop("consulta_banxico", None)
 
     st.caption(
-        "Interés simple con saldo insoluto y tasa constantes durante el período. "
+        "Saldo insoluto constante durante el período. En el modo por tramos se componen "
+        "los factores y se anualiza el resultado, redondeando la tasa equivalente a cuatro decimales; "
+        "después se suma el spread. "
         "Días naturales = fecha final − fecha de inicio. Base de 360 días. "
         "El interés diario se redondea a dos decimales antes de multiplicar por los días."
     )
@@ -285,12 +334,17 @@ if es_banxico and (consultar or (revisar and not faltantes)):
             st.session_state.pop("consulta_banxico", None)
         if consultar or "consulta_banxico" not in st.session_state:
             token = token_banxico()
-            if consultar:
-                consultar_con_cache.clear(serie_id, fecha_tasa, token)
-            with st.spinner("Consultando la tasa en Banxico…"):
-                observacion = consultar_con_cache(serie_id, fecha_tasa, token)
+            observaciones = {}
+            with st.spinner("Consultando las tasas en Banxico…"):
+                for fecha in fechas_consulta:
+                    if consultar:
+                        consultar_con_cache.clear(serie_id, fecha, token)
+                    observaciones[fecha] = consultar_con_cache(serie_id, fecha, token)
+                # Publicamos el conjunto sólo si todas las consultas fueron válidas.
+                compuesto = componer_tasas(tramos, [observaciones[t.consulta].tasa for t in tramos]) if por_tramos else None
             st.session_state["consulta_banxico"] = {
-                "configuracion": configuracion, "observacion": observacion,
+                "configuracion": configuracion, "observaciones": observaciones,
+                "compuesto": compuesto,
             }
     except (ValueError, ErrorBanxico) as error:
         st.session_state.pop("consulta_banxico", None)
@@ -299,13 +353,43 @@ if es_banxico and (consultar or (revisar and not faltantes)):
 registro = st.session_state.get("consulta_banxico") if es_banxico else None
 if es_banxico:
     if registro:
-        observacion = registro["observacion"]
-        tasa_base = observacion.tasa
-        indicador_tasa.metric("Tasa base anual de Banxico", f"{tasa_base:.6f} %")
-        st.caption(
-            f"Fuente: Banxico SIE · Serie: {serie_id} · Fecha del dato: {observacion.fecha:%d/%m/%Y} · "
-            f"Consultada: {observacion.consultada_en:%d/%m/%Y %H:%M} UTC."
-        )
+        if por_tramos:
+            compuesto = registro["compuesto"]
+            tasa_base = compuesto["tasa_equivalente"]
+            indicador_tasa.metric("Tasa equivalente anual", f"{tasa_base:.4f} %")
+            st.subheader("Desglose por tramos")
+            st.table([{
+                "Inicio": fila["tramo"].inicio.strftime("%d/%m/%Y"),
+                "Final": fila["tramo"].fin.strftime("%d/%m/%Y"),
+                "Días": fila["tramo"].dias,
+                "Revisión": fila["tramo"].referencia.strftime("%d/%m/%Y"),
+                "Fecha de consulta": fila["tramo"].consulta.strftime("%d/%m/%Y"),
+                "Tasa anual (%)": f"{fila['tasa']:.4f}",
+                "Tasa equivalente (factor)": f"{fila['factor']:.5f}",
+            } for fila in compuesto["detalle"]])
+            a, b, c = st.columns(3)
+            a.metric("Total de días", compuesto["dias"])
+            b.metric("Producto de factores − 1", f"{compuesto['acumulado']:.8f}")
+            c.metric("Período (360 / días)", f"{compuesto['periodo']:.6f}")
+            st.caption(
+                "Factor = 1 + tasa anual (%) × días / 36000. Se multiplican los factores "
+                "sin redondearlos y se resta 1. Tasa equivalente anual (%) = resultado × 36000 / días. "
+                "El spread se agrega después de redondear esta tasa a cuatro decimales."
+            )
+            st.caption(f"Fuente: Banxico SIE · Serie: {serie_id} · {TASAS_BANXICO[serie_id]}.")
+            with st.expander("Detalle de las consultas a Banxico"):
+                st.table([{
+                    "Fecha del dato": o.fecha.strftime("%d/%m/%Y"),
+                    "Consulta (UTC)": o.consultada_en.strftime("%d/%m/%Y %H:%M"),
+                } for o in registro["observaciones"].values()])
+        else:
+            observacion = registro["observaciones"][fecha_tasa]
+            tasa_base = observacion.tasa
+            indicador_tasa.metric("Tasa base anual de Banxico", f"{tasa_base:.6f} %")
+            st.caption(
+                f"Fuente: Banxico SIE · Serie: {serie_id} · Fecha del dato: {observacion.fecha:%d/%m/%Y} · "
+                f"Consultada: {observacion.consultada_en:%d/%m/%Y %H:%M} UTC."
+            )
     else:
         indicador_tasa.info("Consulta Banxico o pulsa Calcular para obtener la tasa.")
 
@@ -369,7 +453,9 @@ if revisar:
                 ("Fuente / serie", f"Banxico SIE / {serie_id}"),
                 ("Fecha de referencia", fecha_referencia.strftime("%d/%m/%Y")),
                 ("Lookback hábil", str(lookback)),
-                ("Fecha de la tasa SIE", observacion.fecha.strftime("%d/%m/%Y")),
+                ("Frecuencia de revisión", frecuencia),
+                ("Día de revisión", str(dia_revision) if por_tramos else "No aplica"),
+                ("Fechas de la tasa SIE", ", ".join(f.strftime("%d/%m/%Y") for f in fechas_consulta)),
                 ("Calendario", calendario + " (con las fechas seleccionadas)"),
             ])
 
