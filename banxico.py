@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 
 
 TASAS_BANXICO = {
-    "SF43783": "TIIE a 28 días (publicación diaria)",
+    "SF43783": "TIIE a 28 días",
     "SF43878": "TIIE a 91 días",
     "SF111916": "TIIE a 182 días",
     "SF331451": "TIIE de Fondeo a un día",
