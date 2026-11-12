@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import InvalidOperation
 from copy import deepcopy
 import os
@@ -6,15 +6,20 @@ import os
 import pandas as pd
 import streamlit as st
 
-from banxico import TASAS_BANXICO, CONVENCIONES_FECHA, ErrorBanxico, consultar_tasa
+from banxico import TASAS_BANXICO, CONVENCIONES_FECHA, ErrorBanxico, consultar_tasa, consultar_tasas
 from calendario import CALENDARIOS_MX, FUENTES_CALENDARIO, fecha_consulta
 from calculos import calcular_vencimiento
-from tramos import FRECUENCIAS, generar_tramos, componer_tasas
+from tramos import FRECUENCIAS, MODOS_DIARIOS, generar_tramos, componer_tasas
 
 
 @st.cache_data(ttl=3600, max_entries=512, show_spinner=False)
 def consultar_con_cache(serie_id, fecha, token):
     return consultar_tasa(serie_id, fecha, token)
+
+
+@st.cache_data(ttl=3600, max_entries=128, show_spinner=False)
+def consultar_rango_con_cache(serie_id, fechas, token):
+    return consultar_tasas(serie_id, fechas, token)
 
 
 def token_banxico():
@@ -163,9 +168,11 @@ with st.container():
     por_tramos = False
     tramos = []
     fechas_consulta = []
+    modo_diario = None
+    es_diaria = False
     if es_banxico:
         st.caption(
-            "Plazos oficiales: TIIE a 28, 91 y 182 días; TIIE de Fondeo a un día; "
+            "Tasa objetivo de Banxico; TIIE a 28, 91 y 182 días; TIIE de Fondeo a un día; "
             "TIIE de Fondeo compuesta por adelantado a 28, 91 y 182 días. "
             "Puedes revisar la tasa por tramos o fijar una sola tasa para todo el período."
         )
@@ -176,20 +183,35 @@ with st.container():
         )
         conservar_captura("frecuencia")
         por_tramos = frecuencia != "Sin revisión"
+        es_diaria = frecuencia == "Diaria"
         recuperar_captura("dia_revision")
         dia_revision = derecha.number_input(
             "Día de revisión", min_value=1, max_value=31, value=15, step=1,
-            key="dia_revision", disabled=not por_tramos,
+            key="dia_revision", disabled=not por_tramos or es_diaria,
         )
         conservar_captura("dia_revision")
         if por_tramos:
             fecha_referencia = fecha_inicio
-            st.caption(
-                "Las revisiones se anclan al mes de inicio y se repiten según la frecuencia. "
-                "Si el inicio cae entre revisiones, se usa la revisión anterior para el primer tramo. "
-                "Si el día elegido no existe en un mes, se usa su último día. "
-                "Los cortes son fechas de revisión de tasa; la amortización sigue aplicándose al vencimiento final."
-            )
+            if es_diaria:
+                recuperar_captura("modo_diario")
+                modo_diario = st.selectbox(
+                    "Composición en días inhábiles", MODOS_DIARIOS, index=None,
+                    placeholder="Selecciona una convención", key="modo_diario",
+                    help="Naturales: un factor por día. Hábiles: un solo factor desde cada día hábil hasta el siguiente.",
+                )
+                conservar_captura("modo_diario")
+                st.caption(
+                    "Naturales: cada día genera un factor, incluso fines de semana y festivos. "
+                    "Hábiles: un factor abarca todos los días hasta la siguiente revisión hábil. "
+                    "En ambos casos los inhábiles usan la tasa de la fecha hábil previa, con el lookback elegido."
+                )
+            else:
+                st.caption(
+                    "Las revisiones se anclan al mes de inicio y se repiten según la frecuencia. "
+                    "Si el inicio cae entre revisiones, se usa la revisión anterior para el primer tramo. "
+                    "Si el día elegido no existe en un mes, se usa su último día. "
+                    "Los cortes son fechas de revisión de tasa; la amortización sigue aplicándose al vencimiento final."
+                )
         else:
             usar_inicio = st.checkbox("Usar la fecha de inicio como fecha de referencia", value=True)
             fecha_referencia = fecha_inicio if usar_inicio else st.date_input(
@@ -253,9 +275,14 @@ with st.container():
                 if por_tramos:
                     tramos = generar_tramos(
                         fecha_inicio, fecha_fin, frecuencia, dia_revision, lookback, dias_semana, festivos,
+                        modo_diario=modo_diario,
                     )
                     fechas_consulta = list(dict.fromkeys(t.consulta for t in tramos))
                     ultima_referencia = tramos[-1].referencia
+                    if es_diaria:
+                        # También se necesita calendario para decidir si cada
+                        # día devengado es hábil, aunque no genere una consulta.
+                        ultima_referencia = max(ultima_referencia, fecha_fin - timedelta(days=1))
                 else:
                     fecha_tasa = fecha_consulta(fecha_referencia, lookback, dias_semana, festivos)
                     fechas_consulta = [fecha_tasa]
@@ -271,7 +298,8 @@ with st.container():
                 configuracion = (
                     serie_id, fecha_referencia, lookback, tuple(sorted(dias_semana)),
                     festivos, calendario, tuple(fechas_consulta), frecuencia,
-                    dia_revision if por_tramos else None, fecha_fin if por_tramos else None,
+                    dia_revision if por_tramos and not es_diaria else None,
+                    fecha_fin if por_tramos else None, modo_diario if es_diaria else None,
                 )
                 if por_tramos:
                     st.info(f"{len(tramos)} tramos · {(fecha_fin - fecha_inicio).days} días naturales.")
@@ -292,8 +320,9 @@ with st.container():
             st.info(error_calendario)
         st.caption(
             "Si la referencia es inhábil, primero se lleva al hábil anterior y después se resta el lookback. "
-            "Los inhábiles sólo afectan la búsqueda de la tasa: no descuentan días de interés "
-            "ni cambian la fecha final. La fecha consultada corresponde a la fecha de la serie SIE."
+            "Los inhábiles no descuentan días de interés ni cambian la fecha final. "
+            "En revisión diaria, la convención seleccionada determina los cortes de composición. "
+            "La fecha consultada corresponde a la fecha de la serie SIE."
         )
         st.caption(CONVENCIONES_FECHA[serie_id])
 
@@ -336,10 +365,16 @@ if es_banxico and (consultar or (revisar and not faltantes)):
             token = token_banxico()
             observaciones = {}
             with st.spinner("Consultando las tasas en Banxico…"):
-                for fecha in fechas_consulta:
+                if es_diaria:
+                    fechas_lote = tuple(sorted(fechas_consulta))
                     if consultar:
-                        consultar_con_cache.clear(serie_id, fecha, token)
-                    observaciones[fecha] = consultar_con_cache(serie_id, fecha, token)
+                        consultar_rango_con_cache.clear(serie_id, fechas_lote, token)
+                    observaciones = consultar_rango_con_cache(serie_id, fechas_lote, token)
+                else:
+                    for fecha in fechas_consulta:
+                        if consultar:
+                            consultar_con_cache.clear(serie_id, fecha, token)
+                        observaciones[fecha] = consultar_con_cache(serie_id, fecha, token)
                 # Publicamos el conjunto sólo si todas las consultas fueron válidas.
                 compuesto = componer_tasas(tramos, [observaciones[t.consulta].tasa for t in tramos]) if por_tramos else None
             st.session_state["consulta_banxico"] = {
@@ -454,7 +489,8 @@ if revisar:
                 ("Fecha de referencia", fecha_referencia.strftime("%d/%m/%Y")),
                 ("Lookback hábil", str(lookback)),
                 ("Frecuencia de revisión", frecuencia),
-                ("Día de revisión", str(dia_revision) if por_tramos else "No aplica"),
+                ("Día de revisión", str(dia_revision) if por_tramos and not es_diaria else "No aplica"),
+                ("Composición diaria", modo_diario if es_diaria else "No aplica"),
                 ("Fechas de la tasa SIE", ", ".join(f.strftime("%d/%m/%Y") for f in fechas_consulta)),
                 ("Calendario", calendario + " (con las fechas seleccionadas)"),
             ])
