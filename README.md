@@ -40,7 +40,8 @@ Para un crédito con amortización a fin de año, captura cero en los períodos
 sin abono y el importe programado en el período del pago anual. El importe
 se introduce manualmente para cada vencimiento.
 
-El cálculo mantiene el saldo insoluto y las tasas constantes durante el período:
+El cálculo mantiene el saldo insoluto constante. La tasa base puede ser manual,
+una sola observación de Banxico o la tasa anual equivalente obtenida por tramos:
 
 ```text
 Días = fecha final − fecha de inicio
@@ -58,16 +59,66 @@ Los montos admiten hasta dos decimales y las tasas hasta seis decimales.
 La fecha final debe ser igual o
 posterior a la inicial y la amortización debe estar entre cero y el saldo insoluto.
 
-El spread se introduce manualmente. El ajuste del spread corresponde a una
-etapa posterior. Seleccionar una tasa de fondeo no activa composición diaria:
-se fija una observación anual para todo el período. Las tasas compuestas por
-adelantado ya vienen calculadas por Banxico; la aplicación no las recompone.
+El spread se introduce manualmente y se agrega después de obtener la tasa base.
+Seleccionar fondeo no activa composición diaria overnight: la frecuencia elegida
+determina las revisiones. Las tasas compuestas por adelantado se obtienen ya
+calculadas de Banxico; se usan como tasas anuales de los tramos seleccionados.
+
+## Cálculo por tramos
+
+Al elegir Banxico aparecen **Frecuencia de revisión** y **Día de revisión**.
+La opción inicial es Mensual, día 15. También hay Bimestral, Trimestral,
+Semestral y Anual. **Sin revisión** conserva el cálculo anterior con una sola
+tasa; la captura manual también conserva su fórmula anterior.
+
+El calendario de revisiones se ancla al mes de inicio. Para frecuencias de
+varios meses, ese mes define la secuencia (por ejemplo, inicio en junio y
+frecuencia trimestral: junio, septiembre, diciembre, marzo). Si el día elegido
+queda después del inicio, el primer tramo usa la revisión anterior en esa
+misma secuencia. Verifica que el ancla coincida con las condiciones del préstamo.
+Si el día no existe en un mes, se usa su último día; marzo vuelve al día
+original, aunque febrero haya utilizado el 28 o 29.
+
+Los tramos incluyen el inicio y excluyen el final. No se agrega una fila de
+cero días al terminar en una revisión. Cada fecha de revisión se ajusta al hábil
+anterior y luego se resta su lookback. Esto sólo afecta la consulta, no los
+días de devengo. Las consultas repetidas se reutilizan. Un dato faltante impide
+mostrar un cálculo parcial. El límite es de 120 tramos por cálculo.
+
+```text
+Factor del tramo = 1 + tasa anual (%) × días del tramo / 36000
+Rendimiento acumulado = producto de los factores − 1
+Tasa equivalente anual (%) = rendimiento acumulado × 36000 / días totales
+Tasa base = redondear(tasa equivalente anual, 4 decimales)
+Tasa total = tasa base + spread
+Interés = redondear(saldo insoluto × tasa total / 36000, 2) × días totales
+Vencimiento = interés + amortización final
+```
+
+Los factores se muestran con cinco decimales, pero se componen con precisión
+Decimal sin redondeo intermedio. El spread no se compone dentro de cada tramo.
+Las revisiones son de tasa, no abonos intermedios a capital.
+
+Ejemplo verificado con las tasas de las imágenes proporcionadas:
+
+| Inicio | Final | Días | Consulta, lookback 0 | Tasa anual | Factor mostrado |
+| --- | --- | ---: | --- | ---: | ---: |
+| 15/06/2026 | 15/07/2026 | 30 | 15/06/2026 | 6.7559 % | 1.00563 |
+| 15/07/2026 | 15/08/2026 | 31 | 15/07/2026 | 6.7559 % | 1.00582 |
+| 15/08/2026 | 15/09/2026 | 31 | 14/08/2026 | 6.7358 % | 1.00580 |
+| 15/09/2026 | 15/10/2026 | 30 | 15/09/2026 | 6.7458 % | 1.00562 |
+| 15/10/2026 | 31/10/2026 | 16 | 15/10/2026 | 6.7659 % | 1.00301 |
+
+Con 138 días, la tasa equivalente es 6.8198 %. Al sumar 2.85 puntos de spread,
+la tasa total es 9.6698 %. Con saldo 76,704,742.39 y amortización cero, el interés
+y el vencimiento son 2,843,258.16. Las pruebas usan estas tasas como datos
+simulados; no requieren una consulta real al SIE.
 
 ## Tasas disponibles, lookback y calendario
 
 El selector **Tasa** incluye captura manual y estas series oficiales:
 
-- TIIE a 28 días (publicación diaria), a 91 días y a 182 días.
+- TIIE a 28 días, a 91 días y a 182 días.
 - TIIE de Fondeo a un día.
 - TIIE de Fondeo compuesta por adelantado a 28, 91 y 182 días.
 
@@ -77,10 +128,10 @@ identificadores del catálogo están documentados en `banxico.py`.
 
 Para consultar una tasa:
 
-1. Captura la fecha de inicio y elige la tasa.
+1. Captura las fechas de inicio y final, elige la tasa, frecuencia y día de revisión.
 2. Elige **Lookback (días hábiles)**. Cero consulta la fecha de referencia si
-   es hábil. Puedes desmarcar **Usar la fecha de inicio como fecha de referencia**
-   para indicar otra fecha de fijación prevista en el contrato.
+   es hábil. Se aplica a cada revisión. En **Sin revisión** puedes desmarcar
+   **Usar la fecha de inicio como fecha de referencia** para indicar otra fecha.
 3. Se precarga el calendario bancario mexicano de **2025 y 2026**, con sábados
    y domingos inhábiles. En **Editar fechas inhábiles**, agrega, modifica o
    elimina fechas; también puedes cambiar los días semanales inhábiles.
@@ -92,7 +143,7 @@ Para consultar una tasa:
    en 31/03/2026: se excluyen Semana Santa (2 y 3 de abril) y el fin de semana.
 6. Pulsa **Consultar / actualizar tasa Banxico** para revisar la tasa. También
    puedes pulsar directamente **Calcular interés y vencimiento**: se obtiene
-   la tasa si aún no se ha consultado con esas condiciones.
+   las tasas si aún no se han consultado con esas condiciones.
 
 La pantalla muestra la fecha objetivo antes de consultar y la fecha del dato
 SIE, serie, valor y hora de descarga después. **Fecha del dato SIE no significa
@@ -106,7 +157,7 @@ no se calcula con otra observación. No hay sustitución silenciosa por la últi
 tasa ni se inventan tasas futuras. La consulta tiene un tiempo máximo de espera
 y mensajes para problemas de conexión, credenciales o límites de servicio.
 Los datos se conservan en caché durante una hora; el botón de actualización
-fuerza una nueva consulta. Cambiar la serie, la fecha, el lookback o el calendario
+fuerza nuevas consultas. Cambiar la serie, las fechas, la frecuencia, el día de revisión, el lookback o el calendario
 invalida la tasa mostrada. No hay actualización diaria programada ni histórico
 permanente todavía.
 
@@ -145,6 +196,7 @@ calculadora-creditos/
 ├── calculos.py
 ├── banxico.py
 ├── calendario.py
+├── tramos.py
 └── requirements.txt
 ```
 
@@ -152,6 +204,7 @@ calculadora-creditos/
 - `calculos.py` contiene las fórmulas y las validaciones numéricas.
 - `banxico.py` contiene las series y la consulta oficial del SIE.
 - `calendario.py` calcula la fecha de consulta y contiene los festivos verificados.
+- `tramos.py` genera revisiones y obtiene la tasa anual equivalente por composición.
 - `requirements.txt` contiene las dependencias `streamlit` y `pandas`.
 
 Si tu repositorio ya contiene un `app.py`, conserva una copia antes de sustituirlo
@@ -161,7 +214,7 @@ o integra el ejemplo en tu aplicación existente. Si ya tienes
 ## 3. Sube los archivos
 
 1. En la raíz del repositorio, selecciona **Add file → Upload files**.
-2. Arrastra `app.py`, `calculos.py`, `banxico.py`, `calendario.py` y `requirements.txt`.
+2. Arrastra `app.py`, `calculos.py`, `banxico.py`, `calendario.py`, `tramos.py` y `requirements.txt`.
 3. Escribe un mensaje, por ejemplo: `Agregar tasas Banxico y lookback con calendario editable`.
 4. Confirma con **Commit changes** y comprueba la rama donde quedaron los archivos.
 
