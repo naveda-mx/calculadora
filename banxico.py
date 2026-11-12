@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 
 
 TASAS_BANXICO = {
+    "SF61745": "Tasa objetivo de Banxico (SF61745)",
     "SF43783": "TIIE a 28 días",
     "SF43878": "TIIE a 91 días",
     "SF111916": "TIIE a 182 días",
@@ -29,6 +30,7 @@ TASAS_BANXICO = {
 }
 
 CONVENCIONES_FECHA = {
+    "SF61745": "Esta serie es la tasa objetivo de Banxico para el fondeo interbancario a un día; no es la TIIE de Fondeo ni la TIIE a 28 días.",
     **dict.fromkeys(
         ("SF43783", "SF43878", "SF111916"),
         "La fecha SIE de esta TIIE corresponde a su aplicación (publicación en el DOF).",
@@ -55,17 +57,27 @@ class ObservacionTasa:
     consultada_en: datetime
 
 
-def consultar_tasa(serie_id: str, fecha: date, token: str) -> ObservacionTasa:
-    """Obtiene sólo la observación exacta solicitada; no sustituye faltantes."""
+def consultar_tasas(serie_id: str, fechas, token: str):
+    """Solicita un rango y exige cada fecha pedida; nunca sustituye faltantes.
+
+    Los valores no solicitados dentro del rango (por ejemplo N/E en sábados)
+    se ignoran. Devuelve un diccionario fecha -> observación para cada fecha
+    solicitada, deduplicada y ordenada, en una sola petición al SIE.
+    """
     if serie_id not in TASAS_BANXICO:
         raise ValueError("Selecciona una tasa del catálogo de Banxico.")
-    if type(fecha) is not date:
-        raise ValueError("Selecciona una fecha válida para consultar la tasa.")
+    try:
+        fechas = tuple(fechas)
+    except TypeError:
+        raise ValueError("Selecciona fechas válidas para consultar las tasas.") from None
+    if not fechas or any(type(fecha) is not date for fecha in fechas):
+        raise ValueError("Selecciona fechas válidas para consultar las tasas.")
+    fechas = tuple(sorted(set(fechas)))
     if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9]{64}", token.strip()):
         raise ErrorBanxico("Revisa BANXICO_TOKEN: debe contener los 64 caracteres del token del SIE.")
-    fecha_iso = fecha.isoformat()
+    fecha_inicial, fecha_final = fechas[0], fechas[-1]
     solicitud = Request(
-        f"{URL_BASE}/{serie_id}/datos/{fecha_iso}/{fecha_iso}",
+        f"{URL_BASE}/{serie_id}/datos/{fecha_inicial.isoformat()}/{fecha_final.isoformat()}",
         headers={"Bmx-Token": token.strip(), "Accept": "application/json"},
     )
     try:
@@ -91,25 +103,41 @@ def consultar_tasa(serie_id: str, fecha: date, token: str) -> ObservacionTasa:
         datos = series[0].get("datos", [])
         if not isinstance(datos, list):
             raise ValueError
-        if not datos:
+        solicitadas = set(fechas)
+        encontradas = {}
+        consultada_en = datetime.now(timezone.utc)
+        for dato in datos:
+            fecha_dato = datetime.strptime(dato["fecha"], "%d/%m/%Y").date()
+            if not fecha_inicial <= fecha_dato <= fecha_final:
+                raise ValueError
+            if fecha_dato not in solicitadas:
+                continue
+            if fecha_dato in encontradas:
+                raise ValueError
+            valor = dato["dato"]
+            if not isinstance(valor, str):
+                raise ValueError
+            if valor.strip().upper() in ("N/E", "N/D", "N.D.", "N/A", "", "ND"):
+                raise ErrorBanxico(f"Banxico no publicó una tasa numérica para {fecha_dato:%d/%m/%Y}.")
+            tasa = Decimal(valor.replace(",", "").strip())
+            if not tasa.is_finite():
+                raise ValueError
+            encontradas[fecha_dato] = ObservacionTasa(serie_id, fecha_dato, tasa, consultada_en)
+        faltantes = [fecha for fecha in fechas if fecha not in encontradas]
+        if faltantes:
+            resumen = ", ".join(fecha.strftime("%d/%m/%Y") for fecha in faltantes[:5])
+            if len(faltantes) > 5:
+                resumen += f" y {len(faltantes) - 5} fecha(s) más"
             raise ErrorBanxico(
-                f"Banxico no tiene dato de {TASAS_BANXICO[serie_id]} para {fecha:%d/%m/%Y}. "
-                "Revisa el calendario y la fecha de fijación; la tasa puede no estar publicada todavía."
+                f"Banxico no tiene dato de {TASAS_BANXICO[serie_id]} para: {resumen}. "
+                "Revisa el calendario y las fechas de fijación; la tasa puede no estar publicada todavía."
             )
-        if len(datos) != 1:
-            raise ValueError
-        fecha_dato = datetime.strptime(datos[0]["fecha"], "%d/%m/%Y").date()
-        if fecha_dato != fecha:
-            raise ValueError
-        valor = datos[0]["dato"]
-        if not isinstance(valor, str):
-            raise ValueError
-        if valor.strip().upper() in ("N/E", "N/D", "N.D.", "N/A", "", "ND"):
-            raise ErrorBanxico(f"Banxico no publicó una tasa numérica para {fecha:%d/%m/%Y}.")
-        tasa = Decimal(valor.replace(",", "").strip())
-        if not tasa.is_finite():
-            raise ValueError
     except (KeyError, TypeError, ValueError, InvalidOperation):
         raise ErrorBanxico("La respuesta de Banxico no coincide con la serie, fecha o valor esperado.") from None
 
-    return ObservacionTasa(serie_id, fecha_dato, tasa, datetime.now(timezone.utc))
+    return {fecha: encontradas[fecha] for fecha in fechas}
+
+
+def consultar_tasa(serie_id: str, fecha: date, token: str) -> ObservacionTasa:
+    """Obtiene sólo la observación exacta solicitada; no sustituye faltantes."""
+    return consultar_tasas(serie_id, (fecha,), token)[fecha]
