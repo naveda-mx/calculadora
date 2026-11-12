@@ -1,5 +1,5 @@
 from datetime import date, datetime, timedelta, timezone
-from decimal import InvalidOperation
+from decimal import Decimal, InvalidOperation
 from copy import deepcopy
 import os
 
@@ -8,7 +8,7 @@ import streamlit as st
 
 from banxico import TASAS_BANXICO, CONVENCIONES_FECHA, ErrorBanxico, consultar_tasa, consultar_tasas
 from calendario import CALENDARIOS_MX, FUENTES_CALENDARIO, fecha_consulta
-from calculos import calcular_vencimiento
+from calculos import calcular_vencimiento, calcular_vencimiento_por_tramos
 from tramos import FRECUENCIAS, MODOS_DIARIOS, generar_tramos, componer_tasas
 
 
@@ -336,11 +336,10 @@ with st.container():
         st.session_state.pop("consulta_banxico", None)
 
     st.caption(
-        "Saldo insoluto constante durante el período. En el modo por tramos se componen "
-        "los factores y se anualiza el resultado, redondeando la tasa equivalente a cuatro decimales; "
-        "después se suma el spread. "
-        "Días naturales = fecha final − fecha de inicio. Base de 360 días. "
-        "El interés diario se redondea a dos decimales antes de multiplicar por los días."
+        "Base de 360 días; el período cuenta días naturales. En el cálculo por tramos, "
+        "el interés diario de la tasa y el del spread se redondean por separado a centavos. "
+        "Sólo el interés de tasa se acumula en la base al final de cada tramo; "
+        "el spread se calcula sobre el saldo insoluto original."
     )
     st.caption("* Campos obligatorios para calcular.")
     acciones = st.columns(2)
@@ -391,7 +390,7 @@ if es_banxico:
         if por_tramos:
             compuesto = registro["compuesto"]
             tasa_base = compuesto["tasa_equivalente"]
-            indicador_tasa.metric("Tasa equivalente anual", f"{tasa_base:.4f} %")
+            indicador_tasa.metric("Tasa equivalente anual", f"{tasa_base:.10f} %")
             st.subheader("Desglose por tramos")
             st.table([{
                 "Inicio": fila["tramo"].inicio.strftime("%d/%m/%Y"),
@@ -409,7 +408,9 @@ if es_banxico:
             st.caption(
                 "Factor = 1 + tasa anual (%) × días / 36000. Se multiplican los factores "
                 "sin redondearlos y se resta 1. Tasa equivalente anual (%) = resultado × 36000 / días. "
-                "El spread se agrega después de redondear esta tasa a cuatro decimales."
+                "Se muestran 10 decimales de la tasa, sin redondearla internamente. "
+                "El interés monetario se calcula por tramos y componentes diarios redondeados; "
+                "la tasa equivalente es una referencia teórica y el spread no se capitaliza."
             )
             st.caption(f"Fuente: Banxico SIE · Serie: {serie_id} · {TASAS_BANXICO[serie_id]}.")
             with st.expander("Detalle de las consultas a Banxico"):
@@ -434,9 +435,15 @@ if revisar:
         st.warning("Completa los siguientes campos: " + ", ".join(faltantes) + ".")
     elif tasa_base is not None:
         try:
-            resultado = calcular_vencimiento(
-                saldo_insoluto, tasa_base, spread, fecha_inicio, fecha_fin, amortizacion
-            )
+            if por_tramos and registro:
+                resultado = calcular_vencimiento_por_tramos(
+                    saldo_insoluto, spread, amortizacion, compuesto["detalle"]
+                )
+                resultado["tasa_total"] = tasa_base + Decimal(str(spread))
+            else:
+                resultado = calcular_vencimiento(
+                    saldo_insoluto, tasa_base, spread, fecha_inicio, fecha_fin, amortizacion
+                )
         except ValueError as error:
             st.warning(str(error))
         except InvalidOperation:
@@ -477,12 +484,20 @@ if revisar:
             ("Fecha final", fecha_fin.strftime("%d/%m/%Y")),
             ("Días del período", str(resultado["dias"])),
             ("Tasa de referencia", TASAS_BANXICO[serie_id] if es_banxico else "Captura manual"),
-            ("Tasa base anual", f"{tasa_base:.6f} %"),
+            ("Tasa base anual (precisión interna)", f"{tasa_base:f} %"),
             ("Spread anual", f"{spread:.6f} puntos porcentuales"),
-            ("Tasa total anual", f"{resultado['tasa_total']:.6f} %"),
-            ("Interés diario redondeado", f"{resultado['interes_diario']:,.2f}"),
+            ("Tasa total anual teórica (precisión interna)" if por_tramos
+             else "Tasa total anual", f"{resultado['tasa_total']:f} %"),
             ("Amortización del vencimiento", f"{resultado['amortizacion']:,.2f}"),
         ]
+        if por_tramos:
+            campos.extend([
+                ("Interés acumulado de la tasa", f"{resultado['interes_tasa']:,.2f}"),
+                ("Interés diario del spread", f"{resultado['interes_spread_diario']:,.2f}"),
+                ("Interés acumulado del spread", f"{resultado['interes_spread']:,.2f}"),
+            ])
+        else:
+            campos.append(("Interés diario redondeado", f"{resultado['interes_diario']:,.2f}"))
         if registro:
             campos.extend([
                 ("Fuente / serie", f"Banxico SIE / {serie_id}"),
@@ -501,13 +516,36 @@ if revisar:
         izquierda.metric("Interés del período", f"{resultado['interes']:,.2f}{unidad}")
         derecha.metric("Vencimiento", f"{resultado['vencimiento']:,.2f}{unidad}")
         st.caption("Vencimiento = interés del período + amortización de este vencimiento.")
+        if por_tramos:
+            a, b = st.columns(2)
+            a.metric("Intereses de la tasa", f"{resultado['interes_tasa']:,.2f}{unidad}")
+            b.metric("Intereses del spread", f"{resultado['interes_spread']:,.2f}{unidad}")
+            st.subheader("Desglose diario de intereses")
+            st.caption("La base de cálculo de la tasa se actualiza al concluir cada tramo. "
+                       "El interés del spread siempre se calcula sobre el saldo insoluto original.")
+            st.dataframe([{
+                "Inicio": f["inicio"].strftime("%d/%m/%Y"),
+                "Final": f["fin"].strftime("%d/%m/%Y"),
+                "Consulta": f["consulta"].strftime("%d/%m/%Y"),
+                "Tasa anual (%)": f"{f['tasa']:f}",
+                "Base de cálculo": f"{f['base_calculo']:,.2f}",
+                "Interés tasa": f"{f['interes_tasa']:,.2f}",
+                "Interés spread": f"{f['interes_spread']:,.2f}",
+                "Interés total": f"{f['interes_total']:,.2f}",
+                "Interés tasa acumulado": f"{f['interes_tasa_acumulado']:,.2f}",
+            } for f in resultado["detalle_diario"]], hide_index=True)
         with st.expander("Ver datos y desglose"):
             st.table([
                 {"Campo": campo, "Valor": valor or "Sin capturar"}
                 for campo, valor in campos
             ])
-            st.write("Interés diario = redondear(saldo insoluto × (tasa base + spread) / 100 / 360, 2).")
-            st.write("Interés del período = interés diario × días naturales.")
+            if por_tramos:
+                st.write("Interés diario de tasa = redondear(base del tramo × tasa / 36000, 2).")
+                st.write("Interés diario de spread = redondear(saldo insoluto original × spread / 36000, 2).")
+                st.write("Interés del período = suma de ambos intereses diarios; sólo el interés de tasa se capitaliza al concluir cada tramo.")
+            else:
+                st.write("Interés diario = redondear(saldo insoluto × (tasa base + spread) / 100 / 360, 2).")
+                st.write("Interés del período = interés diario × días naturales.")
         st.caption("Para reflejar cambios, vuelve a pulsar «Calcular interés y vencimiento».")
 
 st.caption("La información no se guarda de forma permanente.")
