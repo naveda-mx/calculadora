@@ -2,13 +2,16 @@
 
 from calendar import monthrange
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from calendario import fecha_consulta
 
 
-FRECUENCIAS = {"Mensual": 1, "Bimestral": 2, "Trimestral": 3, "Semestral": 6, "Anual": 12}
+FRECUENCIAS = {"Mensual": 1, "Bimestral": 2, "Trimestral": 3, "Semestral": 6, "Anual": 12,
+               "Diaria": None}
+MODOS_DIARIOS = ("Días naturales: capitalizar cada día",
+                 "Días hábiles: capitalizar hasta el siguiente día hábil")
 
 
 @dataclass(frozen=True)
@@ -24,7 +27,7 @@ class Tramo:
 
 
 def generar_tramos(inicio, fin, frecuencia, dia_revision, lookback=0,
-                   dias_semana=(5, 6), festivos=()):
+                   dias_semana=(5, 6), festivos=(), modo_diario=None):
     """Intervalos [inicio, fin). Ancla mensual: mes de inicio del cálculo.
 
     La revisión vigente puede preceder al inicio. En meses cortos, el día
@@ -35,11 +38,33 @@ def generar_tramos(inicio, fin, frecuencia, dia_revision, lookback=0,
         raise ValueError("Para calcular por tramos, la fecha final debe ser posterior a la inicial.")
     if frecuencia not in FRECUENCIAS:
         raise ValueError("Selecciona una frecuencia de revisión válida.")
+    dias_semana, festivos = tuple(dias_semana), tuple(festivos)
+    if frecuencia == "Diaria":
+        if modo_diario not in MODOS_DIARIOS:
+            raise ValueError("Selecciona cómo componer los días inhábiles para la revisión diaria.")
+        if (fin - inicio).days > 3660:
+            raise ValueError("El período diario supera 3660 días. Divide el cálculo en períodos menores.")
+        resultado = []
+        cursor = inicio
+        while cursor < fin:
+            referencia = cursor
+            if modo_diario == MODOS_DIARIOS[1]:
+                # Un inicio inhábil utiliza la revisión hábil anterior; el
+                # tramo siguiente comienza en el siguiente día hábil.
+                referencia = fecha_consulta(cursor, 0, dias_semana, festivos)
+            consulta = fecha_consulta(referencia, lookback, dias_semana, festivos)
+            corte = cursor + timedelta(days=1)
+            if modo_diario == MODOS_DIARIOS[1]:
+                while corte < fin and fecha_consulta(corte, 0, dias_semana, festivos) != corte:
+                    corte += timedelta(days=1)
+            resultado.append(Tramo(cursor, corte, referencia, consulta))
+            cursor = corte
+        return resultado
+
     if type(dia_revision) is not int or not 1 <= dia_revision <= 31:
         raise ValueError("El día de revisión debe ser un entero entre 1 y 31.")
     meses = FRECUENCIAS[frecuencia]
     ancla = (inicio.year - 1) * 12 + inicio.month - 1
-    dias_semana, festivos = tuple(dias_semana), tuple(festivos)
 
     def fecha_mes(indice):
         anio, mes = divmod(indice, 12)
