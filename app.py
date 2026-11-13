@@ -7,7 +7,8 @@ import pandas as pd
 import streamlit as st
 
 from banxico import TASAS_BANXICO, CONVENCIONES_FECHA, ErrorBanxico, consultar_tasa, consultar_tasas
-from calendario import CALENDARIOS_MX, FUENTES_CALENDARIO, fecha_consulta
+from calendario import (CALENDARIOS_MX, FUENTES_CALENDARIO, fecha_consulta,
+                        MODOS_RECALCULO, AJUSTES_HABILES, resolver_fechas)
 from calculos import calcular_vencimiento, calcular_vencimiento_por_tramos
 from tramos import FRECUENCIAS, MODOS_DIARIOS, generar_tramos, componer_tasas
 
@@ -47,6 +48,50 @@ def recuperar_captura(clave):
 
 def conservar_captura(clave):
     st.session_state["borrador_" + clave] = deepcopy(st.session_state[clave])
+
+
+def seleccionar_calendario():
+    izquierda, derecha = st.columns(2)
+    with izquierda:
+        recuperar_captura("calendario")
+        calendario = st.selectbox("Calendario de días inhábiles", ["Bancario de México", "Personalizado"], key="calendario")
+        conservar_captura("calendario")
+    with derecha:
+        nombres = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
+        recuperar_captura("dias_semana")
+        if "dias_semana" not in st.session_state:
+            st.session_state["dias_semana"] = [5, 6]
+        dias = st.multiselect("Días de la semana inhábiles", list(range(7)),
+                             default=None,
+                             format_func=lambda d: nombres[d], key="dias_semana")
+        conservar_captura("dias_semana")
+    inicial = sorted(f for fechas in CALENDARIOS_MX.values() for f in fechas) if calendario == "Bancario de México" else []
+    with st.expander("Editar fechas inhábiles"):
+        if calendario == "Bancario de México":
+            st.caption("Calendario bancario precargado para " + ", ".join(map(str, sorted(CALENDARIOS_MX))) + ". Fechas editables.")
+            st.markdown(" · ".join(f"[Fuente {anio}]({url})" for anio, url in FUENTES_CALENDARIO.items()))
+        else:
+            st.caption("Agrega los festivos de todos los años de las consultas y del ajuste del vencimiento.")
+        clave = "festivos_mx" if calendario == "Bancario de México" else "festivos_personalizados"
+        base = "base_" + clave
+        if clave not in st.session_state:
+            st.session_state[base] = st.session_state.get(
+                "borrador_" + clave, pd.DataFrame({"Fecha inhábil": pd.to_datetime(inicial)}),
+            ).copy(deep=True)
+        tabla = st.data_editor(st.session_state[base], num_rows="dynamic", hide_index=True, height=260,
+                              column_config={"Fecha inhábil": st.column_config.DateColumn(
+                                  "Fecha inhábil", format="DD/MM/YYYY", required=True)}, key=clave)
+        st.session_state["borrador_" + clave] = tabla.copy(deep=True)
+    festivos = tuple(sorted({pd.Timestamp(f).date() for f in tabla["Fecha inhábil"].dropna()}))
+    return calendario, dias, festivos
+
+
+def verificar_cobertura(calendario, inicial, final):
+    if calendario == "Bancario de México":
+        faltan = set(range(inicial.year, final.year + 1)) - set(CALENDARIOS_MX)
+        if faltan:
+            raise ValueError("No hay calendario bancario precargado para " + ", ".join(map(str, sorted(faltan)))
+                             + ". Selecciona Personalizado y captura sus fechas inhábiles.")
 
 
 st.set_page_config(page_title="Calculadora de intereses", layout="wide")
@@ -170,6 +215,8 @@ with st.container():
     fechas_consulta = []
     modo_diario = None
     es_diaria = False
+    frecuencia = "Sin revisión"
+    fecha_referencia = fecha_inicio
     if es_banxico:
         st.caption(
             "Tasa objetivo de Banxico; TIIE a 28, 91 y 182 días; TIIE de Fondeo a un día; "
@@ -195,9 +242,9 @@ with st.container():
             if es_diaria:
                 recuperar_captura("modo_diario")
                 modo_diario = st.selectbox(
-                    "Composición en días inhábiles", MODOS_DIARIOS, index=None,
-                    placeholder="Selecciona una convención", key="modo_diario",
-                    help="Naturales: un factor por día. Hábiles: un solo factor desde cada día hábil hasta el siguiente.",
+                    "Calendario de revisión diaria", MODOS_DIARIOS, index=None,
+                    placeholder="Selecciona cuándo se revisa la tasa", key="modo_diario",
+                    help="Esta frecuencia define los tramos de tasa; el recálculo del vencimiento se elige por separado.",
                 )
                 conservar_captura("modo_diario")
                 st.caption(
@@ -218,63 +265,33 @@ with st.container():
                 "Fecha de referencia para fijar la tasa", value=fecha_inicio,
                 min_value=date.min, max_value=date.max, format="DD/MM/YYYY", key="fecha_referencia",
             )
-        izquierda, derecha = st.columns(2)
-        with izquierda:
-            recuperar_captura("calendario")
-            calendario = st.selectbox(
-                "Calendario de días inhábiles", ["Bancario de México", "Personalizado"],
-                key="calendario",
-            )
-            conservar_captura("calendario")
-        with derecha:
-            nombres_dias = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
-            recuperar_captura("dias_semana")
-            dias_semana = st.multiselect(
-                "Días de la semana inhábiles", options=list(range(7)), default=[5, 6],
-                format_func=lambda dia: nombres_dias[dia], key="dias_semana",
-            )
-            conservar_captura("dias_semana")
-        festivos_base = (
-            sorted(fecha for fechas in CALENDARIOS_MX.values() for fecha in fechas)
-            if calendario == "Bancario de México" else []
-        )
-        with st.expander("Editar fechas inhábiles"):
-            if calendario == "Bancario de México":
-                st.caption(
-                    "Calendario bancario oficial precargado para "
-                    + ", ".join(str(anio) for anio in sorted(CALENDARIOS_MX))
-                    + ". Puedes agregar, modificar o eliminar fechas."
-                )
-                st.markdown(" · ".join(
-                    f"[Fuente {anio}]({url})" for anio, url in FUENTES_CALENDARIO.items()
-                ))
-            else:
-                st.caption("Agrega los festivos de todos los años que atraviese el lookback.")
-            clave_editor = "festivos_mx" if calendario == "Bancario de México" else "festivos_personalizados"
-            # El editor no admite asignación a su estado. Al volver a mostrarlo,
-            # usamos la última tabla como nueva base; mientras esté visible, la
-            # base permanece estable para no aplicar dos veces una misma edición.
-            clave_base = "base_" + clave_editor
-            if clave_editor not in st.session_state:
-                st.session_state[clave_base] = st.session_state.get(
-                    "borrador_" + clave_editor,
-                    pd.DataFrame({"Fecha inhábil": pd.to_datetime(festivos_base)}),
-                ).copy(deep=True)
-            tabla_festivos = st.data_editor(
-                st.session_state[clave_base],
-                num_rows="dynamic", hide_index=True, height=260,
-                column_config={"Fecha inhábil": st.column_config.DateColumn(
-                    "Fecha inhábil", format="DD/MM/YYYY", required=True,
-                )},
-                key=clave_editor,
-            )
-            st.session_state["borrador_" + clave_editor] = tabla_festivos.copy(deep=True)
-        festivos = tuple(sorted({pd.Timestamp(f).date() for f in tabla_festivos["Fecha inhábil"].dropna()}))
-        if fecha_referencia is not None:
+    st.subheader("Ajuste del vencimiento")
+    izquierda, derecha = st.columns(2)
+    modo_recalculo = izquierda.selectbox("Recálculo de intereses", MODOS_RECALCULO, key="modo_recalculo")
+    ajuste_vencimiento = derecha.selectbox("Si la fecha final es inhábil, pagar el", AJUSTES_HABILES,
+                                           index=1, key="ajuste_vencimiento")
+    st.caption("Sin recálculo: se conserva el fin del período y sólo se mueve el pago. "
+               "Con recálculo: se mueve también el fin del período y se recalculan los días e intereses. "
+               "La fecha de inicio y las reglas de consulta con lookback se conservan.")
+    calendario, dias_semana, festivos = seleccionar_calendario()
+    fechas = None
+    fin_calculo = fecha_fin
+    if fecha_inicio is not None and fecha_fin is not None:
+        try:
+            fechas = resolver_fechas(fecha_inicio, fecha_fin, modo_recalculo, ajuste_vencimiento, dias_semana, festivos)
+            verificar_cobertura(calendario, min(fecha_fin, fechas["fecha_pago"]), max(fecha_fin, fechas["fecha_pago"]))
+            fin_calculo = fechas["fecha_fin_calculo"]
+            st.info(f"Fin del cálculo: {fin_calculo:%d/%m/%Y} · Pago: {fechas['fecha_pago']:%d/%m/%Y} · {fechas['dias']} días.")
+        except ValueError as error:
+            error_calendario = str(error)
+            st.warning(error_calendario)
+
+    if es_banxico:
+        if fecha_referencia is not None and error_calendario is None:
             try:
                 if por_tramos:
                     tramos = generar_tramos(
-                        fecha_inicio, fecha_fin, frecuencia, dia_revision, lookback, dias_semana, festivos,
+                        fecha_inicio, fin_calculo, frecuencia, dia_revision, lookback, dias_semana, festivos,
                         modo_diario=modo_diario,
                     )
                     fechas_consulta = list(dict.fromkeys(t.consulta for t in tramos))
@@ -282,27 +299,21 @@ with st.container():
                     if es_diaria:
                         # También se necesita calendario para decidir si cada
                         # día devengado es hábil, aunque no genere una consulta.
-                        ultima_referencia = max(ultima_referencia, fecha_fin - timedelta(days=1))
+                        ultima_referencia = max(ultima_referencia, fin_calculo - timedelta(days=1))
                 else:
                     fecha_tasa = fecha_consulta(fecha_referencia, lookback, dias_semana, festivos)
                     fechas_consulta = [fecha_tasa]
                     ultima_referencia = fecha_referencia
-                if calendario == "Bancario de México":
-                    sin_cobertura = set(range(min(fechas_consulta).year, ultima_referencia.year + 1)) - set(CALENDARIOS_MX)
-                    if sin_cobertura:
-                        raise ValueError(
-                            "No hay calendario bancario precargado para "
-                            + ", ".join(str(anio) for anio in sorted(sin_cobertura))
-                            + ". Selecciona Personalizado y captura sus fechas inhábiles."
-                        )
+                verificar_cobertura(calendario, min(fechas_consulta), ultima_referencia)
                 configuracion = (
                     serie_id, fecha_referencia, lookback, tuple(sorted(dias_semana)),
                     festivos, calendario, tuple(fechas_consulta), frecuencia,
                     dia_revision if por_tramos and not es_diaria else None,
-                    fecha_fin if por_tramos else None, modo_diario if es_diaria else None,
+                    fin_calculo if por_tramos else None, modo_diario if es_diaria else None,
+                    modo_recalculo, ajuste_vencimiento, fecha_fin, "tasa_anual_4_decimales",
                 )
                 if por_tramos:
-                    st.info(f"{len(tramos)} tramos · {(fecha_fin - fecha_inicio).days} días naturales.")
+                    st.info(f"{len(tramos)} tramos · {(fin_calculo - fecha_inicio).days} días naturales.")
                     with st.expander("Ver fechas de revisión y consulta"):
                         st.table([{
                             "Inicio": t.inicio.strftime("%d/%m/%Y"),
@@ -315,13 +326,13 @@ with st.container():
             except ValueError as error:
                 error_calendario = str(error)
                 st.warning(error_calendario)
-        else:
+        elif fecha_referencia is None:
             error_calendario = "Captura la fecha de inicio o una fecha de referencia para consultar Banxico."
             st.info(error_calendario)
         st.caption(
             "Si la referencia es inhábil, primero se lleva al hábil anterior y después se resta el lookback. "
-            "Los inhábiles no descuentan días de interés ni cambian la fecha final. "
-            "En revisión diaria, la convención seleccionada determina los cortes de composición. "
+            "El ajuste del vencimiento se controla por separado mediante la opción de recálculo. "
+            "La frecuencia de revisión determina los cortes de composición. "
             "La fecha consultada corresponde a la fecha de la serie SIE."
         )
         st.caption(CONVENCIONES_FECHA[serie_id])
@@ -336,10 +347,9 @@ with st.container():
         st.session_state.pop("consulta_banxico", None)
 
     st.caption(
-        "Base de 360 días; el período cuenta días naturales. En el cálculo por tramos, "
-        "el interés diario de la tasa y el del spread se redondean por separado a centavos. "
-        "Sólo el interés de tasa se acumula en la base al final de cada tramo; "
-        "el spread se calcula sobre el saldo insoluto original."
+        "Base de 360 días. Se compone la tasa entre revisiones, se anualiza y se redondea "
+        "a cuatro decimales antes de sumar el spread. El interés se aplica al saldo insoluto "
+        "original, con redondeo diario a centavos. No hay capitalización intermedia con un solo tramo."
     )
     st.caption("* Campos obligatorios para calcular.")
     acciones = st.columns(2)
@@ -390,7 +400,7 @@ if es_banxico:
         if por_tramos:
             compuesto = registro["compuesto"]
             tasa_base = compuesto["tasa_equivalente"]
-            indicador_tasa.metric("Tasa equivalente anual", f"{tasa_base:.10f} %")
+            indicador_tasa.metric("Tasa equivalente anual", f"{tasa_base:.4f} %")
             st.subheader("Desglose por tramos")
             st.table([{
                 "Inicio": fila["tramo"].inicio.strftime("%d/%m/%Y"),
@@ -408,9 +418,8 @@ if es_banxico:
             st.caption(
                 "Factor = 1 + tasa anual (%) × días / 36000. Se multiplican los factores "
                 "sin redondearlos y se resta 1. Tasa equivalente anual (%) = resultado × 36000 / días. "
-                "Se muestran 10 decimales de la tasa, sin redondearla internamente. "
-                "El interés monetario se calcula por tramos y componentes diarios redondeados; "
-                "la tasa equivalente es una referencia teórica y el spread no se capitaliza."
+                "La tasa anual equivalente se redondea a cuatro decimales antes de sumar el spread. "
+                "La composición ocurre entre revisiones y no modifica el saldo insoluto registrado."
             )
             st.caption(f"Fuente: Banxico SIE · Serie: {serie_id} · {TASAS_BANXICO[serie_id]}.")
             with st.expander("Detalle de las consultas a Banxico"):
@@ -433,6 +442,8 @@ if revisar:
     resultado = None
     if faltantes:
         st.warning("Completa los siguientes campos: " + ", ".join(faltantes) + ".")
+    elif error_calendario:
+        st.warning(error_calendario)
     elif tasa_base is not None:
         try:
             if por_tramos and registro:
@@ -442,7 +453,7 @@ if revisar:
                 resultado["tasa_total"] = tasa_base + Decimal(str(spread))
             else:
                 resultado = calcular_vencimiento(
-                    saldo_insoluto, tasa_base, spread, fecha_inicio, fecha_fin, amortizacion
+                    saldo_insoluto, tasa_base, spread, fecha_inicio, fin_calculo, amortizacion
                 )
         except ValueError as error:
             st.warning(str(error))
@@ -481,23 +492,19 @@ if revisar:
             ),
             ("Moneda", referencia["moneda"]),
             ("Fecha de inicio", fecha_inicio.strftime("%d/%m/%Y")),
-            ("Fecha final", fecha_fin.strftime("%d/%m/%Y")),
+            ("Fecha final original", fecha_fin.strftime("%d/%m/%Y")),
+            ("Fin del cálculo", fin_calculo.strftime("%d/%m/%Y")),
+            ("Fecha de pago", fechas["fecha_pago"].strftime("%d/%m/%Y")),
+            ("Recálculo de intereses", modo_recalculo),
+            ("Ajuste de vencimiento", ajuste_vencimiento),
             ("Días del período", str(resultado["dias"])),
             ("Tasa de referencia", TASAS_BANXICO[serie_id] if es_banxico else "Captura manual"),
-            ("Tasa base anual (precisión interna)", f"{tasa_base:f} %"),
+            ("Tasa base anual", f"{tasa_base:.4f} %" if por_tramos else f"{tasa_base:f} %"),
             ("Spread anual", f"{spread:.6f} puntos porcentuales"),
-            ("Tasa total anual teórica (precisión interna)" if por_tramos
-             else "Tasa total anual", f"{resultado['tasa_total']:f} %"),
+            ("Tasa total anual", f"{resultado['tasa_total']:f} %"),
+            ("Interés diario redondeado", f"{resultado['interes_diario']:,.2f}"),
             ("Amortización del vencimiento", f"{resultado['amortizacion']:,.2f}"),
         ]
-        if por_tramos:
-            campos.extend([
-                ("Interés acumulado de la tasa", f"{resultado['interes_tasa']:,.2f}"),
-                ("Interés diario del spread", f"{resultado['interes_spread_diario']:,.2f}"),
-                ("Interés acumulado del spread", f"{resultado['interes_spread']:,.2f}"),
-            ])
-        else:
-            campos.append(("Interés diario redondeado", f"{resultado['interes_diario']:,.2f}"))
         if registro:
             campos.extend([
                 ("Fuente / serie", f"Banxico SIE / {serie_id}"),
@@ -505,7 +512,7 @@ if revisar:
                 ("Lookback hábil", str(lookback)),
                 ("Frecuencia de revisión", frecuencia),
                 ("Día de revisión", str(dia_revision) if por_tramos and not es_diaria else "No aplica"),
-                ("Composición diaria", modo_diario if es_diaria else "No aplica"),
+                ("Calendario de revisión diaria", modo_diario if es_diaria else "No aplica"),
                 ("Fechas de la tasa SIE", ", ".join(f.strftime("%d/%m/%Y") for f in fechas_consulta)),
                 ("Calendario", calendario + " (con las fechas seleccionadas)"),
             ])
@@ -516,36 +523,13 @@ if revisar:
         izquierda.metric("Interés del período", f"{resultado['interes']:,.2f}{unidad}")
         derecha.metric("Vencimiento", f"{resultado['vencimiento']:,.2f}{unidad}")
         st.caption("Vencimiento = interés del período + amortización de este vencimiento.")
-        if por_tramos:
-            a, b = st.columns(2)
-            a.metric("Intereses de la tasa", f"{resultado['interes_tasa']:,.2f}{unidad}")
-            b.metric("Intereses del spread", f"{resultado['interes_spread']:,.2f}{unidad}")
-            st.subheader("Desglose diario de intereses")
-            st.caption("La base de cálculo de la tasa se actualiza al concluir cada tramo. "
-                       "El interés del spread siempre se calcula sobre el saldo insoluto original.")
-            st.dataframe([{
-                "Inicio": f["inicio"].strftime("%d/%m/%Y"),
-                "Final": f["fin"].strftime("%d/%m/%Y"),
-                "Consulta": f["consulta"].strftime("%d/%m/%Y"),
-                "Tasa anual (%)": f"{f['tasa']:f}",
-                "Base de cálculo": f"{f['base_calculo']:,.2f}",
-                "Interés tasa": f"{f['interes_tasa']:,.2f}",
-                "Interés spread": f"{f['interes_spread']:,.2f}",
-                "Interés total": f"{f['interes_total']:,.2f}",
-                "Interés tasa acumulado": f"{f['interes_tasa_acumulado']:,.2f}",
-            } for f in resultado["detalle_diario"]], hide_index=True)
         with st.expander("Ver datos y desglose"):
             st.table([
                 {"Campo": campo, "Valor": valor or "Sin capturar"}
                 for campo, valor in campos
             ])
-            if por_tramos:
-                st.write("Interés diario de tasa = redondear(base del tramo × tasa / 36000, 2).")
-                st.write("Interés diario de spread = redondear(saldo insoluto original × spread / 36000, 2).")
-                st.write("Interés del período = suma de ambos intereses diarios; sólo el interés de tasa se capitaliza al concluir cada tramo.")
-            else:
-                st.write("Interés diario = redondear(saldo insoluto × (tasa base + spread) / 100 / 360, 2).")
-                st.write("Interés del período = interés diario × días naturales.")
+            st.write("Interés diario = redondear(saldo insoluto × (tasa base + spread) / 100 / 360, 2).")
+            st.write("Interés del período = interés diario × días del cálculo.")
         st.caption("Para reflejar cambios, vuelve a pulsar «Calcular interés y vencimiento».")
 
 st.caption("La información no se guarda de forma permanente.")
