@@ -1,5 +1,7 @@
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
+
+from tramos import componer_tasas
 
 
 def calcular_vencimiento(
@@ -53,66 +55,17 @@ def calcular_vencimiento(
 
 
 def calcular_vencimiento_por_tramos(saldo_insoluto, spread, amortizacion, detalle):
-    """Calcula intereses diarios separados y capitaliza la tasa al final de cada tramo.
+    """Aplica el esquema del primer ejemplo: equivalente a 4 decimales + spread.
 
-    El spread siempre se aplica al saldo insoluto original y no se capitaliza.
-    Cada importe diario se redondea a centavos antes de acumularlo. La base de
-    la tasa permanece constante dentro de un tramo, incluidos los días inhábiles
-    agrupados, y aumenta con el interés de tasa al iniciar el tramo siguiente.
-    El detalle debe proceder de ``componer_tasas`` y contener tramos consecutivos.
+    La composición ocurre en los factores por revisión de tasa. El resultado
+    anualizado se redondea a cuatro decimales antes de sumar el spread; después
+    se aplica al saldo insoluto original con redondeo diario del interés total.
     """
     detalle = list(detalle)
     if not detalle:
         raise ValueError("Se necesita al menos un tramo con su tasa.")
+    compuesto = componer_tasas([f["tramo"] for f in detalle], [f["tasa"] for f in detalle])
     inicio = detalle[0]["tramo"].inicio
     fin = detalle[-1]["tramo"].fin
-    # Conserva las validaciones de importes, spread, amortización y fechas del
-    # cálculo manual, sin limitar la precisión de la tasa equivalente calculada.
-    validar = calcular_vencimiento(saldo_insoluto, 0, spread, inicio, fin, amortizacion)
-    saldo = Decimal(str(saldo_insoluto))
-    margen = Decimal(str(spread))
-    centavo = Decimal("0.01")
-    interes_spread_diario = (saldo * margen / Decimal("36000")).quantize(
-        centavo, rounding=ROUND_HALF_UP
-    )
-    base_calculo = saldo
-    acumulado_tasa = Decimal("0.00")
-    acumulado_spread = Decimal("0.00")
-    filas = []
-    anterior = inicio
-    for fila in detalle:
-        tramo = fila["tramo"]
-        tasa = Decimal(str(fila["tasa"]))
-        if tramo.inicio != anterior or tramo.dias <= 0 or not tasa.is_finite():
-            raise ValueError("Los tramos deben ser consecutivos y contener tasas válidas.")
-        interes_tasa_diario = (base_calculo * tasa / Decimal("36000")).quantize(
-            centavo, rounding=ROUND_HALF_UP
-        )
-        for desplazamiento in range(tramo.dias):
-            dia = tramo.inicio + timedelta(days=desplazamiento)
-            acumulado_tasa += interes_tasa_diario
-            acumulado_spread += interes_spread_diario
-            filas.append({
-                "inicio": dia, "fin": dia + timedelta(days=1),
-                "consulta": tramo.consulta, "tasa": tasa,
-                "base_calculo": base_calculo,
-                "interes_tasa": interes_tasa_diario,
-                "interes_spread": interes_spread_diario,
-                "interes_total": interes_tasa_diario + interes_spread_diario,
-                "interes_tasa_acumulado": acumulado_tasa,
-            })
-        base_calculo += interes_tasa_diario * tramo.dias
-        anterior = tramo.fin
-    if len(filas) != validar["dias"]:
-        raise ValueError("Los tramos no cubren todos los días del período.")
-    interes = acumulado_tasa + acumulado_spread
-    return {
-        "dias": validar["dias"],
-        "interes_tasa": acumulado_tasa,
-        "interes_spread": acumulado_spread,
-        "interes_spread_diario": interes_spread_diario,
-        "interes": interes,
-        "amortizacion": validar["amortizacion"],
-        "vencimiento": interes + validar["amortizacion"],
-        "detalle_diario": filas,
-    }
+    return calcular_vencimiento(saldo_insoluto, compuesto["tasa_equivalente"], spread,
+                                inicio, fin, amortizacion)
