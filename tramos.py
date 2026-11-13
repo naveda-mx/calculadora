@@ -3,15 +3,14 @@
 from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from calendario import fecha_consulta
 
 
 FRECUENCIAS = {"Mensual": 1, "Bimestral": 2, "Trimestral": 3, "Semestral": 6, "Anual": 12,
                "Diaria": None}
-MODOS_DIARIOS = ("Días naturales: capitalizar cada día",
-                 "Días hábiles: capitalizar hasta el siguiente día hábil")
+MODOS_DIARIOS = ("Revisión cada día natural", "Revisión sólo en días hábiles")
 
 
 @dataclass(frozen=True)
@@ -41,7 +40,7 @@ def generar_tramos(inicio, fin, frecuencia, dia_revision, lookback=0,
     dias_semana, festivos = tuple(dias_semana), tuple(festivos)
     if frecuencia == "Diaria":
         if modo_diario not in MODOS_DIARIOS:
-            raise ValueError("Selecciona cómo componer los días inhábiles para la revisión diaria.")
+            raise ValueError("Selecciona si la revisión diaria ocurre en días naturales o hábiles.")
         if (fin - inicio).days > 3660:
             raise ValueError("El período diario supera 3660 días. Divide el cálculo en períodos menores.")
         resultado = []
@@ -91,11 +90,12 @@ def generar_tramos(inicio, fin, frecuencia, dia_revision, lookback=0,
 
 
 def componer_tasas(tramos, tasas):
-    """Compone factores y anualiza conservando la precisión Decimal.
+    """Compone factores; redondea la tasa anual equivalente a cuatro decimales.
 
     Las tasas recibidas están en porcentaje anual. El spread se agrega después
-    fuera de los factores por tramo. La tasa equivalente no se redondea para
-    el cálculo; el redondeo de importes diarios se trata por separado.
+    fuera de los factores por tramo. La composición ocurre entre las revisiones
+    configuradas, no al completar un número fijo de días del tenor de la tasa.
+    Con un solo tramo no hay capitalización intermedia.
     """
     tramos, tasas = list(tramos), list(tasas)
     if not tramos or len(tramos) != len(tasas):
@@ -119,5 +119,6 @@ def componer_tasas(tramos, tasas):
     return {
         "detalle": detalle, "dias": dias, "acumulado": acumulado,
         "periodo": Decimal(360) / dias, "tasa_sin_redondear": anual,
-        "tasa_equivalente": anual,
+        "tasa_equivalente": anual.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP),
+        "capitalizacion_intermedia": len(tramos) > 1,
     }
