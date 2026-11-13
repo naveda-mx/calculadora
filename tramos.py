@@ -11,6 +11,7 @@ from calendario import fecha_consulta
 FRECUENCIAS = {"Mensual": 1, "Bimestral": 2, "Trimestral": 3, "Semestral": 6, "Anual": 12,
                "Diaria": None}
 MODOS_DIARIOS = ("Revisión cada día natural", "Revisión sólo en días hábiles")
+CAPITALIZAR_SOBRE = ("Sólo tasa base", "Tasa base + spread")
 
 
 @dataclass(frozen=True)
@@ -122,3 +123,28 @@ def componer_tasas(tramos, tasas):
         "tasa_equivalente": anual.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP),
         "capitalizacion_intermedia": len(tramos) > 1,
     }
+
+
+def componer_condiciones(tramos, tasas_base, spread, capitalizar_sobre=CAPITALIZAR_SOBRE[0]):
+    """Compone la base o la tasa total, sin aplicar dos veces el spread.
+
+    Base: equivalente de las tasas base a 4 decimales, más spread simple.
+    Total: equivalente de (tasa base + spread) a 4 decimales; ya incluye spread.
+    El detalle conserva tanto la tasa original como la utilizada en el factor.
+    """
+    if capitalizar_sobre not in CAPITALIZAR_SOBRE:
+        raise ValueError("Selecciona si capitalizar sólo la tasa base o tasa base más spread.")
+    margen = Decimal(str(spread))
+    if not margen.is_finite() or margen != margen.quantize(Decimal("0.000001")):
+        raise ValueError("Captura el spread como número finito con hasta seis decimales.")
+    tasas = [Decimal(str(tasa)) for tasa in tasas_base]
+    incluye_spread = capitalizar_sobre == CAPITALIZAR_SOBRE[1]
+    tasas_factor = [tasa + margen for tasa in tasas] if incluye_spread else tasas
+    compuesto = componer_tasas(tramos, tasas_factor)
+    for fila, base in zip(compuesto["detalle"], tasas):
+        fila["tasa_base"] = base
+        fila["spread"] = margen
+    compuesto["capitalizar_sobre"] = capitalizar_sobre
+    compuesto["incluye_spread"] = incluye_spread
+    compuesto["tasa_total"] = compuesto["tasa_equivalente"] + (Decimal(0) if incluye_spread else margen)
+    return compuesto
