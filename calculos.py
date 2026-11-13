@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 
-from tramos import componer_tasas
+from tramos import CAPITALIZAR_SOBRE, componer_condiciones
 
 
 def calcular_vencimiento(
@@ -54,18 +54,26 @@ def calcular_vencimiento(
     }
 
 
-def calcular_vencimiento_por_tramos(saldo_insoluto, spread, amortizacion, detalle):
-    """Aplica el esquema del primer ejemplo: equivalente a 4 decimales + spread.
+def calcular_vencimiento_por_tramos(saldo_insoluto, spread, amortizacion, detalle,
+                                    capitalizar_sobre=CAPITALIZAR_SOBRE[0]):
+    """Aplica la base de capitalización elegida, con equivalente a 4 decimales.
 
     La composición ocurre en los factores por revisión de tasa. El resultado
-    anualizado se redondea a cuatro decimales antes de sumar el spread; después
-    se aplica al saldo insoluto original con redondeo diario del interés total.
+    Sólo base: el spread se suma después de componer. Base + spread: se incluye
+    en los factores y no se vuelve a sumar al equivalente. El interés total se
+    aplica al saldo original con redondeo diario a centavos.
     """
     detalle = list(detalle)
     if not detalle:
         raise ValueError("Se necesita al menos un tramo con su tasa.")
-    compuesto = componer_tasas([f["tramo"] for f in detalle], [f["tasa"] for f in detalle])
+    compuesto = componer_condiciones(
+        [f["tramo"] for f in detalle], [f.get("tasa_base", f["tasa"]) for f in detalle],
+        spread, capitalizar_sobre,
+    )
     inicio = detalle[0]["tramo"].inicio
     fin = detalle[-1]["tramo"].fin
-    return calcular_vencimiento(saldo_insoluto, compuesto["tasa_equivalente"], spread,
-                                inicio, fin, amortizacion)
+    resultado = calcular_vencimiento(saldo_insoluto, compuesto["tasa_total"], 0,
+                                     inicio, fin, amortizacion)
+    resultado["tasa_equivalente"] = compuesto["tasa_equivalente"]
+    resultado["capitalizar_sobre"] = capitalizar_sobre
+    return resultado
