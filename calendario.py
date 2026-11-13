@@ -8,6 +8,10 @@ from datetime import date, timedelta
 from typing import Iterable
 
 
+MODOS_RECALCULO = ("Sin recálculo", "Con recálculo")
+AJUSTES_HABILES = ("Día hábil anterior", "Día hábil siguiente")
+
+
 # Calendarios bancarios CNBV, artículo 1, publicados en el DOF. Se conservan
 # las fechas expresamente publicadas, incluso cuando caen en fin de semana.
 # No se extrapolan estas disposiciones a años sin una fuente verificada.
@@ -98,3 +102,33 @@ def fecha_consulta(
         while not es_habil(resultado):
             resultado = anterior(resultado)
     return resultado
+
+
+def ajustar_fecha_habil(fecha, ajuste, dias_semana_inhabiles=(5, 6), festivos=()):
+    """Ajusta una fecha de pago; no se utiliza para el lookback de las tasas."""
+    dias_semana_inhabiles, festivos = tuple(dias_semana_inhabiles), tuple(festivos)
+    anterior = fecha_consulta(fecha, 0, dias_semana_inhabiles, festivos)
+    if ajuste not in AJUSTES_HABILES:
+        raise ValueError("Selecciona el ajuste al día hábil anterior o siguiente.")
+    if ajuste == AJUSTES_HABILES[0] or anterior == fecha:
+        return anterior
+    resultado = fecha
+    while resultado.weekday() in dias_semana_inhabiles or resultado in festivos:
+        if resultado == date.max:
+            raise ValueError("El ajuste al siguiente día hábil excede el rango de fechas permitido.")
+        resultado += timedelta(days=1)
+    return resultado
+
+
+def resolver_fechas(inicio, final, modo, ajuste, dias_semana_inhabiles=(5, 6), festivos=()):
+    """Sin recálculo se mueve sólo el pago; con recálculo también el fin de devengo."""
+    if type(inicio) is not date or type(final) is not date or final < inicio:
+        raise ValueError("La fecha final debe ser igual o posterior a la fecha de inicio.")
+    if modo not in MODOS_RECALCULO:
+        raise ValueError("Selecciona una opción de recálculo válida.")
+    pago = ajustar_fecha_habil(final, ajuste, dias_semana_inhabiles, festivos)
+    fin_calculo = pago if modo == MODOS_RECALCULO[1] else final
+    if fin_calculo < inicio or pago < inicio:
+        raise ValueError("El ajuste de vencimiento lleva la fecha antes del inicio del préstamo.")
+    return {"fecha_final_original": final, "fecha_fin_calculo": fin_calculo,
+            "fecha_pago": pago, "dias": (fin_calculo - inicio).days}
