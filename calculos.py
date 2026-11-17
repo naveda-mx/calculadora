@@ -88,6 +88,7 @@ def calcular_vencimiento(
 def calcular_vencimiento_por_tramos(
     saldo_insoluto, spread, amortizacion, detalle,
     capitalizar_sobre=CAPITALIZAR_SOBRE[0], metodo=METODOS_CALCULO[0],
+    decimales_tasa=4,
 ):
     """Métodos explícitos de la hoja «Cálculo de Interés» del Excel de referencia.
 
@@ -97,7 +98,7 @@ def calcular_vencimiento_por_tramos(
     K original y redondea ambos componentes por separado (hoja diaria del usuario).
     Equivalente sobre base: X41:Z42 y L41. Se anualiza el producto de factores,
     sin redondear factores ni producto. Sólo el equivalente anual se redondea
-    a cuatro decimales porcentuales, antes de agregar el spread. Después se
+    a los decimales porcentuales elegidos (4 por defecto), antes de agregar el spread. Después se
     aplica el redondeo monetario diario del numeral 1.5.4.
     Equivalente sobre total: W51:W52 y L51. K × (producto de factores − 1),
     redondeado a centavos al final; el spread ya está dentro de los factores.
@@ -118,7 +119,7 @@ def calcular_vencimiento_por_tramos(
         _, tasa, _, _ = _validar_importes_y_tasas(saldo, tasa_original, margen, abono)
         tasas_base.append(tasa)
     compuesto = componer_condiciones(
-        [f["tramo"] for f in detalle], tasas_base, margen, capitalizar_sobre,
+        [f["tramo"] for f in detalle], tasas_base, margen, capitalizar_sobre, decimales_tasa,
     )
     dias = compuesto["dias"]
     interes_diario = None
@@ -165,5 +166,6 @@ def calcular_vencimiento_por_tramos(
         "tasa_equivalente": compuesto["tasa_equivalente"],
         "capitalizar_sobre": capitalizar_sobre if metodo != "Interés simple" else None,
         "metodo": metodo,
+        "decimales_tasa": decimales_tasa,
         "detalle_calculo": detalle_calculo,
     }
