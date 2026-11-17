@@ -219,6 +219,7 @@ with st.container():
     fecha_referencia = fecha_inicio
     capitalizar_sobre = CAPITALIZAR_SOBRE[0]
     metodo_calculo = "Interés simple"
+    decimales_tasa = 4
     if es_banxico:
         st.caption(
             "Tasa objetivo de Banxico; TIIE a 28, 91 y 182 días; TIIE de Fondeo a un día; "
@@ -255,6 +256,16 @@ with st.container():
                  "No aplica al interés simple.",
         )
         conservar_captura("capitalizar_sobre")
+        if por_tramos:
+            recuperar_captura("decimales_tasa")
+            decimales_tasa = st.number_input(
+                "Decimales de la tasa anual equivalente (%)", min_value=0, max_value=10,
+                value=4, step=1, key="decimales_tasa", disabled=metodo_calculo != "Tasa equivalente",
+                help="Se redondea el porcentaje anual final antes de sumar el spread, sin redondear factores. "
+                     "Ejemplo: 5 decimales aplica 6.52253 %. Si la tasa incluye spread dentro de los factores, "
+                     "el equivalente anual es informativo y este selector no cambia el importe.",
+            )
+            conservar_captura("decimales_tasa")
         if por_tramos:
             fecha_referencia = fecha_inicio
             if es_diaria:
@@ -375,7 +386,7 @@ with st.container():
                    "el spread se calcula sobre el saldo original y se redondea por separado.")
     else:
         st.caption("Tasa equivalente: se multiplican los factores sin redondearlos. Sobre tasa base, se anualiza "
-                   "y se redondea la tasa anual equivalente a cuatro decimales antes de sumar el spread. Luego se aplica el redondeo monetario diario. Sobre tasa total, "
+                   f"y se redondea la tasa anual equivalente a {decimales_tasa} decimales antes de sumar el spread. Luego se aplica el redondeo monetario diario. Sobre tasa total, "
                    "se multiplica el saldo por el rendimiento acumulado y se redondea a centavos al final.")
     st.caption("* Campos obligatorios para calcular.")
     acciones = st.columns(2)
@@ -426,7 +437,7 @@ if registro and por_tramos and (spread is not None or alcance == CAPITALIZAR_SOB
     try:
         compuesto = componer_condiciones(
             tramos, [registro["observaciones"][t.consulta].tasa for t in tramos],
-            spread if spread is not None else 0, alcance,
+            spread if spread is not None else 0, alcance, decimales_tasa,
         )
     except (ValueError, InvalidOperation) as error:
         st.warning(str(error))
@@ -436,7 +447,7 @@ if es_banxico:
             tasa_base = compuesto["tasa_equivalente"]
             if metodo_calculo == "Tasa equivalente":
                 etiqueta_equivalente = "Tasa equivalente anual total (incluye spread)" if compuesto["incluye_spread"] else "Tasa equivalente anual"
-                indicador_tasa.metric(etiqueta_equivalente, f"{tasa_base:.4f} %")
+                indicador_tasa.metric(etiqueta_equivalente, f"{tasa_base:.{decimales_tasa}f} %")
             else:
                 indicador_tasa.info("Se usa la tasa de cada tramo; consulta el desglose.")
             st.subheader("Desglose por tramos")
@@ -462,11 +473,12 @@ if es_banxico:
                     "Factor = 1 + tasa para el factor (%) × días / 36000. Rendimiento = producto de factores − 1. "
                     "Tasa equivalente anual (%) = rendimiento × 36000 / días. "
                     "Los factores se muestran abreviados, pero ellos y su producto se conservan exactos. "
-                    "Sólo se redondea la tasa anual equivalente final a cuatro decimales porcentuales."
+                    f"Sólo se redondea la tasa anual equivalente final a {decimales_tasa} decimales porcentuales."
                 )
-                st.caption("El spread está dentro de los factores; interés = saldo original × rendimiento acumulado, redondeado al final."
+                st.caption("El spread está dentro de los factores; interés = saldo original × rendimiento acumulado, redondeado al final. "
+                           "Los decimales del equivalente anual sólo afectan su presentación en este método."
                            if compuesto["incluye_spread"] else
-                           "El spread se suma después de redondear el equivalente anual a cuatro decimales. Luego se redondea el interés diario a centavos y se multiplica por los días.")
+                           f"El spread se suma después de redondear el equivalente anual a {decimales_tasa} decimales. Luego se redondea el interés diario a centavos y se multiplica por los días.")
             else:
                 st.caption("Los tramos determinan dónde cambia la tasa y, para tasa compuesta, dónde se capitaliza. "
                            "No se utiliza una tasa anual equivalente para calcular los importes.")
@@ -500,7 +512,7 @@ if revisar:
         try:
             if por_tramos and registro:
                 resultado = calcular_vencimiento_por_tramos(
-                    saldo_insoluto, spread, amortizacion, compuesto["detalle"], alcance, metodo_calculo
+                    saldo_insoluto, spread, amortizacion, compuesto["detalle"], alcance, metodo_calculo, decimales_tasa
                 )
             else:
                 resultado = calcular_vencimiento(
@@ -530,7 +542,7 @@ if revisar:
         elif metodo_calculo == "Tasa equivalente":
             etiqueta_tasa = ("Tasa equivalente anual total (incluye spread)" if compuesto["incluye_spread"]
                              else "Tasa base anual equivalente")
-            valor_tasa = f"{tasa_base:.4f} %"
+            valor_tasa = f"{tasa_base:.{decimales_tasa}f} %"
         else:
             etiqueta_tasa, valor_tasa = "Tasas base anuales por tramo", "Ver tasas de cada tramo"
         campos = [
@@ -559,6 +571,7 @@ if revisar:
             ("Días del período", str(resultado["dias"])),
             ("Tasa de referencia", TASAS_BANXICO[serie_id] if es_banxico else "Captura manual"),
             ("Método de cálculo", metodo_calculo),
+            ("Decimales de la tasa anual equivalente (%)", str(decimales_tasa) if metodo_calculo == "Tasa equivalente" else "No aplica"),
             (etiqueta_tasa, valor_tasa),
             ("Spread anual", f"{spread:.6f} puntos porcentuales"),
             ("Amortización del vencimiento", f"{resultado['amortizacion']:,.2f}"),
@@ -609,7 +622,7 @@ if revisar:
                 st.write("Interés del período = redondear(saldo original × (producto de factores − 1), 2). "
                          "Cada factor incluye tasa base y spread. No se añade nuevamente el spread ni se redondea una tasa anual para calcular el importe.")
             elif metodo_calculo == "Tasa equivalente":
-                st.write("Tasa base equivalente anual (%) = redondear((producto de factores − 1) × 36000 / días, 4). "
+                st.write(f"Tasa base equivalente anual (%) = redondear((producto de factores − 1) × 36000 / días, {decimales_tasa}). "
                          "Los factores y su producto se conservan sin redondear. "
                          "Tasa total anual (%) = tasa base equivalente + spread.")
                 st.write("Interés del período = redondear(saldo original × tasa total anual / 36000, 2) × días del cálculo.")
