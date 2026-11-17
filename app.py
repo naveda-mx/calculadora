@@ -10,7 +10,7 @@ from banxico import TASAS_BANXICO, CONVENCIONES_FECHA, ErrorBanxico, consultar_t
 from calendario import (CALENDARIOS_MX, FUENTES_CALENDARIO, fecha_consulta,
                         MODOS_RECALCULO, AJUSTES_HABILES, resolver_fechas)
 from calculos import METODOS_CALCULO, calcular_vencimiento, calcular_vencimiento_por_tramos
-from tramos import FRECUENCIAS, MODOS_DIARIOS, CAPITALIZAR_SOBRE, generar_tramos, componer_condiciones
+from tramos import FRECUENCIAS, MODOS_DIARIOS, CAPITALIZAR_SOBRE, generar_tramos, componer_condiciones, mostrar_decimal_exacto
 
 
 @st.cache_data(ttl=3600, max_entries=512, show_spinner=False)
@@ -462,7 +462,8 @@ if es_banxico:
             if metodo_calculo == "Tasa equivalente":
                 for fila, factor in zip(filas_tramos, compuesto["detalle"]):
                     fila["Tasa para el factor (%)"] = f"{factor['tasa']:.6f}"
-                    fila["Tasa equivalente (factor)"] = f"{factor['factor']:.5f}"
+                    fila["Tasa equivalente (factor)"] = mostrar_decimal_exacto(factor["factor_exacto"])
+                    fila["Factor exacto (fracción)"] = str(factor["factor_exacto"])
             st.table(filas_tramos)
             if metodo_calculo == "Tasa equivalente":
                 a, b, c = st.columns(3)
@@ -472,7 +473,8 @@ if es_banxico:
                 st.caption(
                     "Factor = 1 + tasa para el factor (%) × días / 36000. Rendimiento = producto de factores − 1. "
                     "Tasa equivalente anual (%) = rendimiento × 36000 / días. "
-                    "Los factores se muestran abreviados, pero ellos y su producto se conservan exactos. "
+                    "Los factores se muestran exactos, también como fracción. Los paréntesis indican los decimales "
+                    "que se repiten indefinidamente: 1.00(3) = 1.003333… No se trunca ni redondea el factor. "
                     f"Sólo se redondea la tasa anual equivalente final a {decimales_tasa} decimales porcentuales."
                 )
                 st.caption("El spread está dentro de los factores; interés = saldo original × rendimiento acumulado, redondeado al final. "
