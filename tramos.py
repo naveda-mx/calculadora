@@ -91,6 +91,30 @@ def generar_tramos(inicio, fin, frecuencia, dia_revision, lookback=0,
     return resultado
 
 
+def mostrar_decimal_exacto(valor):
+    """Expansión decimal exacta: los paréntesis señalan el período repetido.
+
+    Usa división entera, sin redondeo. Por ejemplo, 1/120 es 0.008(3).
+    En los factores de tasas decimales y base 360 el período es corto.
+    """
+    valor = Fraction(valor)
+    signo = "-" if valor < 0 else ""
+    entero, resto = divmod(abs(valor.numerator), valor.denominator)
+    if not resto:
+        return f"{signo}{entero}"
+    digitos, posiciones = [], {}
+    while resto and resto not in posiciones:
+        posiciones[resto] = len(digitos)
+        digito, resto = divmod(resto * 10, valor.denominator)
+        digitos.append(str(digito))
+    if resto:
+        corte = posiciones[resto]
+        decimales = "".join(digitos[:corte]) + "(" + "".join(digitos[corte:]) + ")"
+    else:
+        decimales = "".join(digitos)
+    return f"{signo}{entero}.{decimales}"
+
+
 def redondear_tasa_equivalente(anual_exacto, decimales=4):
     """Redondea el porcentaje anual al número de decimales elegido al final.
 
@@ -132,6 +156,7 @@ def componer_tasas(tramos, tasas, decimales_tasa=4):
             raise ValueError("Las tasas deben producir factores de acumulación positivos.")
         producto *= factor
         detalle.append({"tramo": tramo, "tasa": tasa,
+        detalle.append({"tramo": tramo, "tasa": tasa, "factor_exacto": factor,
                         "factor": Decimal(factor.numerator) / Decimal(factor.denominator)})
     dias = sum(t.dias for t in tramos)
     acumulado = producto - 1
