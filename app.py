@@ -375,7 +375,7 @@ with st.container():
                    "el spread se calcula sobre el saldo original y se redondea por separado.")
     else:
         st.caption("Tasa equivalente: se multiplican los factores sin redondearlos. Sobre tasa base, se anualiza "
-                   "con toda su precisión, se suma el spread y se aplica el redondeo diario. Sobre tasa total, "
+                   "y se redondea la tasa anual equivalente a cuatro decimales antes de sumar el spread. Luego se aplica el redondeo monetario diario. Sobre tasa total, "
                    "se multiplica el saldo por el rendimiento acumulado y se redondea a centavos al final.")
     st.caption("* Campos obligatorios para calcular.")
     acciones = st.columns(2)
@@ -436,7 +436,7 @@ if es_banxico:
             tasa_base = compuesto["tasa_equivalente"]
             if metodo_calculo == "Tasa equivalente":
                 etiqueta_equivalente = "Tasa equivalente anual total (incluye spread)" if compuesto["incluye_spread"] else "Tasa equivalente anual"
-                indicador_tasa.metric(etiqueta_equivalente, f"{tasa_base:.10f} %")
+                indicador_tasa.metric(etiqueta_equivalente, f"{tasa_base:.4f} %")
             else:
                 indicador_tasa.info("Se usa la tasa de cada tramo; consulta el desglose.")
             st.subheader("Desglose por tramos")
@@ -461,11 +461,12 @@ if es_banxico:
                 st.caption(
                     "Factor = 1 + tasa para el factor (%) × días / 36000. Rendimiento = producto de factores − 1. "
                     "Tasa equivalente anual (%) = rendimiento × 36000 / días. "
-                    "Los valores mostrados se abrevian; el cálculo conserva la precisión de los factores y de la conversión."
+                    "Los factores se muestran abreviados, pero ellos y su producto se conservan exactos. "
+                    "Sólo se redondea la tasa anual equivalente final a cuatro decimales porcentuales."
                 )
                 st.caption("El spread está dentro de los factores; interés = saldo original × rendimiento acumulado, redondeado al final."
                            if compuesto["incluye_spread"] else
-                           "El spread se suma al equivalente anual sin redondear. Luego se redondea el interés diario a centavos y se multiplica por los días.")
+                           "El spread se suma después de redondear el equivalente anual a cuatro decimales. Luego se redondea el interés diario a centavos y se multiplica por los días.")
             else:
                 st.caption("Los tramos determinan dónde cambia la tasa y, para tasa compuesta, dónde se capitaliza. "
                            "No se utiliza una tasa anual equivalente para calcular los importes.")
@@ -529,7 +530,7 @@ if revisar:
         elif metodo_calculo == "Tasa equivalente":
             etiqueta_tasa = ("Tasa equivalente anual total (incluye spread)" if compuesto["incluye_spread"]
                              else "Tasa base anual equivalente")
-            valor_tasa = f"{tasa_base:.10f} %"
+            valor_tasa = f"{tasa_base:.4f} %"
         else:
             etiqueta_tasa, valor_tasa = "Tasas base anuales por tramo", "Ver tasas de cada tramo"
         campos = [
@@ -608,7 +609,8 @@ if revisar:
                 st.write("Interés del período = redondear(saldo original × (producto de factores − 1), 2). "
                          "Cada factor incluye tasa base y spread. No se añade nuevamente el spread ni se redondea una tasa anual para calcular el importe.")
             elif metodo_calculo == "Tasa equivalente":
-                st.write("Tasa base equivalente anual (%) = (producto de factores − 1) × 36000 / días, sin redondear. "
+                st.write("Tasa base equivalente anual (%) = redondear((producto de factores − 1) × 36000 / días, 4). "
+                         "Los factores y su producto se conservan sin redondear. "
                          "Tasa total anual (%) = tasa base equivalente + spread.")
                 st.write("Interés del período = redondear(saldo original × tasa total anual / 36000, 2) × días del cálculo.")
             else:
