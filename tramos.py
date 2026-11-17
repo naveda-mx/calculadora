@@ -155,7 +155,6 @@ def componer_tasas(tramos, tasas, decimales_tasa=4):
         if factor <= 0:
             raise ValueError("Las tasas deben producir factores de acumulación positivos.")
         producto *= factor
-        detalle.append({"tramo": tramo, "tasa": tasa,
         detalle.append({"tramo": tramo, "tasa": tasa, "factor_exacto": factor,
                         "factor": Decimal(factor.numerator) / Decimal(factor.denominator)})
     dias = sum(t.dias for t in tramos)
