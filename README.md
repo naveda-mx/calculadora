@@ -9,7 +9,7 @@ La página utiliza el ancho de la pantalla y organiza los campos en tres columna
 
 ## 1. Captura los datos y las condiciones
 
-En la hoja de referencia, las filas 35 a 40 están marcadas como
+En el catálogo inicial `Tasas_Interés_1.xlsx`, las filas 35 a 40 están marcadas como
 **Referencia** en la columna D. De ahí se toman los siguientes campos:
 
 | Campo | Captura |
@@ -51,16 +51,20 @@ Interés del período = interés diario × días
 Vencimiento = interés del período + amortización
 ```
 
-La base de 360 días y el redondeo diario a centavos siguen las fórmulas R29,
-R30 y R68 de la hoja de referencia. Se utiliza redondeo de mitades alejándose
-de cero, equivalente a REDONDEAR de Excel. El interés se aplica al saldo
+La base de 360 días y el redondeo diario a centavos siguen el numeral 1.5.4
+de la imagen en **Tipos Tasas y Fórmula** y T5:T6 de **Cálculo de Interés** del
+archivo `EDO CTA  SIN INFONAVIT Y FIDE_Ago2026_copia.xlsx` proporcionado.
+Se utiliza redondeo de mitades alejándose de cero, equivalente a REDONDEAR
+de Excel. El tercer decimal determina el centavo; no se redondea primero
+a tres decimales, porque eso introduciría un doble redondeo. El interés se aplica al saldo
 insoluto capturado, antes del abono a capital del vencimiento.
 Los montos admiten hasta dos decimales y las tasas hasta seis decimales.
 La fecha final debe ser igual o
 posterior a la inicial y la amortización debe estar entre cero y el saldo insoluto.
 
-El spread se introduce manualmente. El selector **Capitalizar sobre** determina
-si se suma después de componer sólo la base o si se incluye en los factores.
+El spread se introduce manualmente. **Método de cálculo** distingue interés
+simple, tasa compuesta y tasa equivalente. **Capitalizar sobre** determina
+si se capitaliza sólo la base o también el spread.
 Seleccionar fondeo no activa composición diaria overnight: la frecuencia elegida
 determina las revisiones. Las tasas compuestas por adelantado se obtienen ya
 calculadas de Banxico; se usan como tasas anuales de los tramos seleccionados.
@@ -87,6 +91,9 @@ al día 28. En el ejemplo de 138 días, los cinco factores sí se componen.
 
 ## Ajuste del vencimiento con o sin recálculo
 
+Los cuatro criterios corresponden a **Recálculo**, L4:N9. La propia hoja
+indica que se determinan contractualmente; se conserva la elección del usuario.
+
 Disponible tanto en captura manual como en consulta Banxico. Primero aparece
 **Sin recálculo**, seguido de **Con recálculo**. El segundo selector permite
 elegir **Día hábil anterior** o **Día hábil siguiente**. La fecha de inicio no se
@@ -108,43 +115,122 @@ La regla de lookback se aplica a cada revisión como antes. La dirección elegid
 para el pago no invierte la búsqueda histórica de las tasas. Un ajuste que
 lleve el pago o el fin de cálculo antes del inicio se rechaza.
 
-## Capitalizar sobre
+## Métodos de cálculo y capitalización
 
-En el cálculo por tramos se puede elegir:
+La hoja **Recálculo** contiene una imagen de las opciones Tasa Compuesta,
+Tasa Equivalente sobre tasa total y Tasa Equivalente sobre tasa base.
+La página reproduce esa distinción mediante **Método de cálculo** y
+**Capitalizar sobre**, y añade el interés simple del primer bloque de
+**Cálculo de Interés**. La opción inicial sigue siendo Tasa equivalente / Sólo tasa base.
 
-- **Sólo tasa base** (opción inicial): se componen las tasas base de cada
-  revisión. El equivalente anual se redondea a cuatro decimales y luego se
-  suma el spread simple, sin capitalizarlo.
-- **Tasa base + spread**: cada factor utiliza la suma de tasa base y spread.
-  El equivalente anual total se redondea a cuatro decimales y ya incluye el
-  spread; no se agrega una segunda vez.
+Las siguientes fórmulas reciben tasas en porcentaje anual (por ejemplo,
+`6.75`, no `0.0675`); por eso el denominador es `36000 = 100 × 360`.
+`K` es el saldo insoluto original, `n_i` los días del tramo y `N` los días totales.
+La base de esta versión es días naturales / 360, utilizada en los ejemplos.
+El numeral 1.5.4 permite otras bases según el contrato; no se implementan
+convenciones 30/360 ni otras bases anuales en esta versión.
+
+### Interés simple
 
 ```text
-Sólo base:
-  Factor i = 1 + tasa_base_i × días_i / 36000
-  Tasa total = redondear((producto_factores − 1) × 36000 / días, 4) + spread
-
-Base + spread:
-  Factor i = 1 + (tasa_base_i + spread) × días_i / 36000
-  Tasa total = redondear((producto_factores − 1) × 36000 / días, 4)
+Interés_i = REDONDEAR(K × (base_i + spread) / 36000, 2) × n_i
+Interés del período = suma de Interés_i
 ```
 
-La tabla de tramos distingue la tasa base original y la tasa usada en el
-factor. El resumen indica si la tasa equivalente ya incluye el spread.
-Cambiar esta opción o el spread recompone el cálculo con las tasas originales
-consultadas, sin descargarlas de nuevo. Los resultados monetarios se actualizan
-al pulsar **Calcular interés y vencimiento**.
+No incorpora intereses previos al capital. Corresponde a la fórmula diaria
+del numeral 1.5.4 y a T5:T6. **Capitalizar sobre** se deshabilita.
 
-Por ejemplo, dos tramos de 30 días con base 8 % y spread 2 % producen una
-tasa total de 10.0267 % al capitalizar sólo base, o 10.0417 % al capitalizar
-base más spread. Con saldo 360,000 e interés diario redondeado, los intereses
-son 6,016.20 y 6,025.20, respectivamente. Con spread cero ambos modos coinciden.
-Con un solo tramo no hay capitalización intermedia; sigue aplicándose la regla
-de redondeo del modo elegido.
+### Tasa compuesta
 
-El selector se deshabilita en **Sin revisión** y no se aplica a captura manual.
-Es independiente del ajuste de vencimiento con o sin recálculo y del calendario
-de revisiones. No se añade un desglose diario de intereses.
+Se calculan importes por tramo, conforme a U23:U25 y U55:U57.
+Con **Tasa base + spread**:
+
+```text
+K_i = K + suma de los intereses de tramos anteriores
+Interés_i = REDONDEAR(K_i × (base_i + spread) / 36000, 2) × n_i
+```
+
+Con **Sólo tasa base**, siguiendo también la hoja diaria del usuario:
+
+```text
+K_i = K + suma de intereses BASE de tramos anteriores
+Interés base_i = REDONDEAR(K_i × base_i / 36000, 2) × n_i
+Interés spread_i = REDONDEAR(K × spread / 36000, 2) × n_i
+Interés_i = Interés base_i + Interés spread_i
+```
+
+Sólo se incorpora el interés capitalizable al pasar al siguiente tramo.
+El spread conserva el saldo original cuando queda fuera de la capitalización.
+Los componentes se redondean por separado en esa opción. El interés final
+es la suma de los importes de los tramos. No se sustituye este proceso por
+una tasa equivalente: sus redondeos pueden producir importes distintos.
+
+### Tasa equivalente sobre tasa base
+
+Corresponde a T33:Z33 y S41:Z42, con margen fuera de los factores:
+
+```text
+Factor_i = 1 + base_i × n_i / 36000
+Rendimiento = producto de Factor_i − 1
+Tasa base equivalente anual (%) = Rendimiento × 36000 / N
+Tasa total anual (%) = Tasa base equivalente anual + spread
+Interés = REDONDEAR(K × Tasa total anual / 36000, 2) × N
+```
+
+**La conversión conserva toda su precisión**, conforme a la aclaración del
+usuario y a la nota U42 «sin redondeo por la conversión». Esta decisión
+sustituye la regla anterior de cuatro decimales. El libro contiene una
+diferencia interna: L41 utiliza Z42, una tasa total capturada a cuatro
+decimales porcentuales, en lugar de la conversión completa X41+Y41.
+Con los datos de ese bloque, la precisión completa produce **4,110,224.30**;
+con la tasa capturada `10.1317 %`, L41 produce **4,110,238.86**. La calculadora
+aplica la precisión completa solicitada, sin forzar el importe de Z42.
+
+### Tasa equivalente sobre tasa total
+
+Corresponde a U51:W52 y L51; el spread queda dentro del factor:
+
+```text
+Factor_i = 1 + (base_i + spread) × n_i / 36000
+Rendimiento = producto de Factor_i − 1
+Interés = REDONDEAR(K × Rendimiento, 2)
+```
+
+Se utiliza directamente el rendimiento efectivo del período. La tasa anual
+equivalente mostrada sirve como referencia; no se redondea ni se usa un
+promedio diario para obtener el interés. No se suma de nuevo el spread.
+El resultado de L51 se presenta en centavos.
+
+### Precisión, pantalla y comprobaciones
+
+Los factores se muestran con cinco decimales y el equivalente anual con diez,
+pero esos valores de presentación no se reutilizan para calcular importes.
+Los factores y sus productos se conservan internamente como fracciones exactas.
+El redondeo monetario compara el centavo exacto con su mitad; así una división
+periódica no convierte un empate de `0.005` en `0.004999…`.
+Los montos capturados y los resultados monetarios usan Decimal.
+
+La pantalla muestra las tasas por tramo, las fórmulas del método seleccionado
+y el resumen final. No se añade una tabla diaria de intereses. El saldo insoluto
+registrado se conserva; el capital de cálculo sólo crece dentro del método
+compuesto. Cambiar el método, el alcance o el spread reutiliza las tasas originales
+consultadas. Los importes se actualizan al pulsar **Calcular interés y vencimiento**.
+En captura manual y **Sin revisión** se conserva el interés simple.
+
+Regresiones incluidas en `tests/test_normativa.py`:
+
+| Referencia en Cálculo de Interés | Método | Interés |
+| --- | --- | ---: |
+| T5 | Simple | 26,332.95 |
+| T6 | Simple | 369,859.14 |
+| U23:U25 | Compuesta, base + spread | 7,733,389.12 |
+| U27 | Equivalente sobre total | 7,733,389.20 |
+| L32 / Z33 | Equivalente sobre base, conversión completa | 98,364.33 |
+| L51 | Equivalente sobre total | 2,281,351.86 |
+| U55:U57 | Compuesta, base + spread | 2,281,351.86 |
+
+Los valores TERM SOFR del ejemplo se utilizan como datos fijos para verificar
+la fórmula; no se incorpora una conexión a CME.
 
 Los tramos incluyen el inicio y excluyen el final. No se agrega una fila de
 cero días al terminar en una revisión. Cada fecha de revisión se ajusta al hábil
@@ -160,19 +246,19 @@ Selecciona **Diaria** y elige explícitamente el calendario de revisión;
 no es necesario capturar un día del mes:
 
 - **Revisión cada día natural.** Cada día devengado tiene su propio
-  factor. Un sábado, domingo o festivo utiliza la referencia hábil anterior,
-  con el lookback seleccionado. Los factores se multiplican también en esos días.
-- **Revisión sólo en días hábiles.** Un factor cubre
+  tramo. Un sábado, domingo o festivo utiliza la referencia hábil anterior,
+  con el lookback seleccionado.
+- **Revisión sólo en días hábiles.** Un tramo cubre
   desde la revisión hábil hasta la siguiente, incluyendo los días inhábiles
   intermedios. Si el período comienza en un inhábil, se toma la revisión hábil
   anterior y se cuentan sólo los días desde el inicio del período.
 
 Por ejemplo, del viernes al martes siguiente, con sábado y domingo inhábiles y
-sin otros festivos: la primera convención produce cuatro factores de un día;
-la segunda produce un factor viernes–lunes de tres días y otro lunes–martes de
+sin otros festivos: la primera convención produce cuatro tramos de un día;
+la segunda produce un tramo viernes–lunes de tres días y otro lunes–martes de
 un día. En ambas se devengan cuatro días y se aplica el lookback a cada
 referencia. Si la tasa del viernes es `r` en decimal y el lunes es `s`, los
-factores son `(1 + r/360)^3 × (1 + s/360)` y
+factores, al elegir tasa equivalente, son `(1 + r/360)^3 × (1 + s/360)` y
 `(1 + 3r/360) × (1 + s/360)`, respectivamente. Sus resultados pueden diferir.
 Esta elección corresponde a la frecuencia de revisión, no al recálculo por
 ajuste de la fecha de pago. Ambas opciones se controlan por separado.
@@ -181,26 +267,6 @@ Para la revisión diaria la aplicación agrupa las fechas necesarias en una
 consulta de rango al SIE. Verifica cada observación solicitada, no la sustituye
 por otra y muestra un error si falta; los fines de semana se mapean al hábil
 anterior según el calendario seleccionado antes de consultar.
-
-```text
-Factor del tramo = 1 + tasa anual (%) × días del tramo / 36000
-Rendimiento acumulado = producto de los factores − 1
-Tasa equivalente anual (%) = rendimiento acumulado × 36000 / días totales
-Tasa base = redondear(tasa equivalente anual, 4 decimales)
-Tasa total = tasa base + spread (opción Sólo tasa base)
-Interés diario = redondear(saldo insoluto original × tasa total / 36000, 2)
-Interés = interés diario × días totales del cálculo
-Vencimiento = interés + amortización final
-```
-
-Los factores se muestran con cinco decimales, pero se componen con precisión
-Decimal sin redondeo intermedio. La tasa anual equivalente sí se redondea a
-cuatro decimales antes de sumar el spread cuando se selecciona Sólo tasa base,
-siguiendo el primer ejemplo confirmado. En Tasa base + spread ya se compone
-la suma dentro de los factores y el equivalente total no recibe otro spread.
-El saldo insoluto registrado no aumenta en cada revisión. La pantalla muestra el resumen y los tramos,
-sin tabla diaria de intereses. Las revisiones no son amortizaciones intermedias.
-El redondeo es de mitades alejándose de cero, como REDONDEAR de Excel.
 
 Ejemplo verificado con las tasas de las imágenes proporcionadas:
 
@@ -212,18 +278,24 @@ Ejemplo verificado con las tasas de las imágenes proporcionadas:
 | 15/09/2026 | 15/10/2026 | 30 | 15/09/2026 | 6.7458 % | 1.00562 |
 | 15/10/2026 | 31/10/2026 | 16 | 15/10/2026 | 6.7659 % | 1.00301 |
 
-Con 138 días, la tasa anual equivalente sin redondear es aproximadamente
-6.8197970459 %, que se utiliza como 6.8198 %. Con saldo 76,704,742.39, spread
-2.85 % y amortización cero, el interés y vencimiento son 2,843,258.16. Se
-recupera así el primer ejemplo. Las pruebas usan tasas simuladas, no una consulta real.
+Con 138 días, el equivalente anual es aproximadamente 6.8197970459 %.
+Con saldo 76,704,742.39, spread 2.85 % y amortización cero, la conversión
+completa produce **2,843,256.78**. El resultado anterior **2,843,258.16** usaba
+6.8198 % antes de sumar el spread. La diferencia responde a la precisión
+ahora solicitada. Las pruebas usan tasas de las imágenes, sin consulta real.
 
 Ejemplo de la hoja diaria: saldo `4,278,722,682.86`, spread `1 %`, del
 29/10/2026 al 05/11/2026, revisión diaria en días hábiles, lookback 5 y
 02/11/2026 inhábil. Con las tasas de la imagen 6.53 %, 6.52 % (cuatro días),
-6.51 % y 6.52 %, la tasa anual equivalente se usa como 6.5225 % (4 decimales).
-La tasa total es 7.5225 %, el interés diario 894,074.76 y el vencimiento sin
-amortización 6,258,523.32. La regla confirmada de cuatro decimales sustituye la
-versión que redondeaba componentes diarios por separado y daba 6,258,548.93.
+6.51 % y 6.52 %:
+
+- **Tasa compuesta / Sólo tasa base:** **6,258,548.93**, como en la hoja diaria.
+  El interés base capitalizable suma 5,426,575.06 y el spread 831,973.87.
+- **Tasa equivalente / Sólo tasa base, precisión completa:** **6,258,548.94**.
+  El equivalente es aproximadamente 6.5225307778 % y el interés diario 894,078.42.
+
+La diferencia de un centavo se debe a los distintos puntos de redondeo.
+El importe anterior 6,258,523.32 usaba el equivalente reducido a 6.5225 %.
 Estas tasas son simuladas y no confirman una consulta real a Banxico.
 
 ## Tasas disponibles, lookback y calendario
