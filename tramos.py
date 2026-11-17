@@ -91,20 +91,32 @@ def generar_tramos(inicio, fin, frecuencia, dia_revision, lookback=0,
     return resultado
 
 
+def redondear_tasa_equivalente(anual_exacto):
+    """Redondea el porcentaje anual a cuatro decimales, al terminar la conversión.
+
+    Opera sobre la fracción exacta para no aproximar los factores ni su producto.
+    Las mitades se redondean alejándose de cero, como REDONDEAR de Excel.
+    """
+    unidades, resto = divmod(abs(anual_exacto.numerator) * 10000, anual_exacto.denominator)
+    if resto * 2 >= anual_exacto.denominator:
+        unidades += 1
+    return Decimal(-unidades if anual_exacto < 0 else unidades).scaleb(-4)
+
+
 def componer_tasas(tramos, tasas):
-    """Compone factores y conserva la tasa anual equivalente sin redondear.
+    """Compone factores exactos y redondea sólo el equivalente anual a 4 decimales.
 
     Las tasas recibidas están en porcentaje anual. La composición ocurre entre las revisiones
     configuradas, no al completar un número fijo de días del tenor de la tasa.
     Con un solo tramo no hay capitalización intermedia.
-    «tasa_equivalente» sirve para mostrar la conversión anual. Los importes
-    usan las fracciones exactas para no redondear ni siquiera cocientes periódicos.
+    «tasa_sin_redondear» conserva la conversión como referencia. La tasa aplicada
+    antes de agregar el spread es «tasa_equivalente», a cuatro decimales porcentuales.
     """
     tramos, tasas = list(tramos), list(tasas)
     if not tramos or len(tramos) != len(tasas):
         raise ValueError("Se necesita una tasa para cada tramo.")
     # Los cocientes /360 pueden ser decimales periódicos. Las fracciones
-    # conservan exactamente los factores hasta el redondeo monetario final.
+    # conservan exactamente los factores hasta redondear el equivalente anual.
     producto = Fraction(1)
     detalle = []
     for i, (tramo, valor) in enumerate(zip(tramos, tasas)):
@@ -127,7 +139,8 @@ def componer_tasas(tramos, tasas):
         "detalle": detalle, "dias": dias,
         "acumulado": Decimal(acumulado.numerator) / Decimal(acumulado.denominator),
         "_acumulado_exacto": acumulado, "_anual_exacto": anual_exacto,
-        "periodo": Decimal(360) / dias, "tasa_equivalente": anual,
+        "periodo": Decimal(360) / dias, "tasa_sin_redondear": anual,
+        "tasa_equivalente": redondear_tasa_equivalente(anual_exacto),
         "capitalizacion_intermedia": len(tramos) > 1,
     }
 
@@ -135,7 +148,7 @@ def componer_tasas(tramos, tasas):
 def componer_condiciones(tramos, tasas_base, spread, capitalizar_sobre=CAPITALIZAR_SOBRE[0]):
     """Compone la base o la tasa total, sin aplicar dos veces el spread.
 
-    Base: equivalente de las tasas base con toda su precisión, más spread simple.
+    Base: equivalente de las tasas base redondeado a cuatro decimales, más spread simple.
     Total: equivalente de (tasa base + spread); ya incluye spread.
     El detalle conserva tanto la tasa original como la utilizada en el factor.
     """
