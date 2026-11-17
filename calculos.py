@@ -96,9 +96,9 @@ def calcular_vencimiento_por_tramos(
     capitalizables previos, ya redondeados. Sólo base conserva el spread sobre
     K original y redondea ambos componentes por separado (hoja diaria del usuario).
     Equivalente sobre base: X41:Z42 y L41. Se anualiza el producto de factores,
-    se conserva toda su precisión, se agrega spread y se usa el redondeo diario.
-    Esto sigue la nota U42 y la precisión confirmada por el usuario; no la tasa
-    capturada manualmente a cuatro decimales en Z42.
+    sin redondear factores ni producto. Sólo el equivalente anual se redondea
+    a cuatro decimales porcentuales, antes de agregar el spread. Después se
+    aplica el redondeo monetario diario del numeral 1.5.4.
     Equivalente sobre total: W51:W52 y L51. K × (producto de factores − 1),
     redondeado a centavos al final; el spread ya está dentro de los factores.
 
@@ -132,7 +132,7 @@ def calcular_vencimiento_por_tramos(
             tasa_total = compuesto["tasa_equivalente"]
         else:
             tasa_total = compuesto["tasa_equivalente"] + margen
-            interes_diario = redondear_interes_diario(saldo, compuesto["_anual_exacto"] + Fraction(margen))
+            interes_diario = redondear_interes_diario(saldo, tasa_total)
             interes = interes_diario * dias
     else:
         capital = saldo
