@@ -3,7 +3,8 @@
 from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
+from fractions import Fraction
 
 from calendario import fecha_consulta
 
@@ -91,17 +92,20 @@ def generar_tramos(inicio, fin, frecuencia, dia_revision, lookback=0,
 
 
 def componer_tasas(tramos, tasas):
-    """Compone factores; redondea la tasa anual equivalente a cuatro decimales.
+    """Compone factores y conserva la tasa anual equivalente sin redondear.
 
-    Las tasas recibidas están en porcentaje anual. El spread se agrega después
-    fuera de los factores por tramo. La composición ocurre entre las revisiones
+    Las tasas recibidas están en porcentaje anual. La composición ocurre entre las revisiones
     configuradas, no al completar un número fijo de días del tenor de la tasa.
     Con un solo tramo no hay capitalización intermedia.
+    «tasa_equivalente» sirve para mostrar la conversión anual. Los importes
+    usan las fracciones exactas para no redondear ni siquiera cocientes periódicos.
     """
     tramos, tasas = list(tramos), list(tasas)
     if not tramos or len(tramos) != len(tasas):
         raise ValueError("Se necesita una tasa para cada tramo.")
-    producto = Decimal(1)
+    # Los cocientes /360 pueden ser decimales periódicos. Las fracciones
+    # conservan exactamente los factores hasta el redondeo monetario final.
+    producto = Fraction(1)
     detalle = []
     for i, (tramo, valor) in enumerate(zip(tramos, tasas)):
         if tramo.dias <= 0 or (i and tramo.inicio != tramos[i - 1].fin):
@@ -109,18 +113,21 @@ def componer_tasas(tramos, tasas):
         tasa = Decimal(str(valor))
         if not tasa.is_finite():
             raise ValueError("Todas las tasas deben ser números finitos.")
-        factor = Decimal(1) + tasa * tramo.dias / Decimal(36000)
+        factor = Fraction(1) + Fraction(tasa) * tramo.dias / 36000
         if factor <= 0:
             raise ValueError("Las tasas deben producir factores de acumulación positivos.")
         producto *= factor
-        detalle.append({"tramo": tramo, "tasa": tasa, "factor": factor})
+        detalle.append({"tramo": tramo, "tasa": tasa,
+                        "factor": Decimal(factor.numerator) / Decimal(factor.denominator)})
     dias = sum(t.dias for t in tramos)
     acumulado = producto - 1
-    anual = acumulado * Decimal(36000) / dias
+    anual_exacto = acumulado * 36000 / dias
+    anual = Decimal(anual_exacto.numerator) / Decimal(anual_exacto.denominator)
     return {
-        "detalle": detalle, "dias": dias, "acumulado": acumulado,
-        "periodo": Decimal(360) / dias, "tasa_sin_redondear": anual,
-        "tasa_equivalente": anual.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP),
+        "detalle": detalle, "dias": dias,
+        "acumulado": Decimal(acumulado.numerator) / Decimal(acumulado.denominator),
+        "_acumulado_exacto": acumulado, "_anual_exacto": anual_exacto,
+        "periodo": Decimal(360) / dias, "tasa_equivalente": anual,
         "capitalizacion_intermedia": len(tramos) > 1,
     }
 
@@ -128,8 +135,8 @@ def componer_tasas(tramos, tasas):
 def componer_condiciones(tramos, tasas_base, spread, capitalizar_sobre=CAPITALIZAR_SOBRE[0]):
     """Compone la base o la tasa total, sin aplicar dos veces el spread.
 
-    Base: equivalente de las tasas base a 4 decimales, más spread simple.
-    Total: equivalente de (tasa base + spread) a 4 decimales; ya incluye spread.
+    Base: equivalente de las tasas base con toda su precisión, más spread simple.
+    Total: equivalente de (tasa base + spread); ya incluye spread.
     El detalle conserva tanto la tasa original como la utilizada en el factor.
     """
     if capitalizar_sobre not in CAPITALIZAR_SOBRE:
