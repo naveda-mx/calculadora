@@ -9,9 +9,6 @@ La página utiliza el ancho de la pantalla y organiza los campos en tres columna
 
 ## 1. Captura los datos y las condiciones
 
-En el catálogo inicial `Tasas_Interés_1.xlsx`, las filas 35 a 40 están marcadas como
-**Referencia** en la columna D. De ahí se toman los siguientes campos:
-
 | Campo | Captura |
 | --- | --- |
 | ID de cliente | Texto para conservar ceros iniciales |
@@ -21,8 +18,7 @@ En el catálogo inicial `Tasas_Interés_1.xlsx`, las filas 35 a 40 están marcad
 | Subaplicación | Texto para conservar el código tal como se escribe |
 | Fecha de operación | Selector de fecha, inicialmente vacío |
 
-Se incluyen también **Disposición (Disp.)** y **Moneda**, presentes en las filas
-34 y 47 del catálogo. Moneda permite identificar la unidad de los importes.
+Moneda permite identificar la unidad de los importes.
 Por ahora ambos son campos de texto libres.
 
 Las condiciones adicionales se capturan en el formulario:
@@ -51,9 +47,6 @@ Interés del período = interés diario × días
 Vencimiento = interés del período + amortización
 ```
 
-La base de 360 días y el redondeo diario a centavos siguen el numeral 1.5.4
-de la imagen en **Tipos Tasas y Fórmula** y T5:T6 de **Cálculo de Interés** del
-archivo `EDO CTA  SIN INFONAVIT Y FIDE_Ago2026_copia.xlsx` proporcionado.
 Se utiliza redondeo de mitades alejándose de cero, equivalente a REDONDEAR
 de Excel. El tercer decimal determina el centavo; no se redondea primero
 a tres decimales, porque eso introduciría un doble redondeo. El interés se aplica al saldo
@@ -91,8 +84,7 @@ al día 28. En el ejemplo de 138 días, los cinco factores sí se componen.
 
 ## Ajuste del vencimiento con o sin recálculo
 
-Los cuatro criterios corresponden a **Recálculo**, L4:N9. La propia hoja
-indica que se determinan contractualmente; se conserva la elección del usuario.
+Los cuatro criterios corresponden a **Recálculo** que se determinan contractualmente; se conserva la elección del usuario.
 
 Disponible tanto en captura manual como en consulta Banxico. Primero aparece
 **Sin recálculo**, seguido de **Con recálculo**. El segundo selector permite
@@ -142,8 +134,7 @@ del numeral 1.5.4 y a T5:T6. **Capitalizar sobre** se deshabilita.
 
 ### Tasa compuesta
 
-Se calculan importes por tramo, conforme a U23:U25 y U55:U57.
-Con **Tasa base + spread**:
+Se calculan importes por tramo, con **Tasa base + spread**:
 
 ```text
 K_i = K + suma de los intereses de tramos anteriores
@@ -167,8 +158,6 @@ una tasa equivalente: sus redondeos pueden producir importes distintos.
 
 ### Tasa equivalente sobre tasa base
 
-Corresponde a T33:Z33 y S41:Z42, con margen fuera de los factores:
-
 ```text
 Factor_i = 1 + base_i × n_i / 36000
 Rendimiento = producto de Factor_i − 1
@@ -176,15 +165,6 @@ Tasa base equivalente anual (%) = Rendimiento × 36000 / N
 Tasa total anual (%) = Tasa base equivalente anual + spread
 Interés = REDONDEAR(K × Tasa total anual / 36000, 2) × N
 ```
-
-**La conversión conserva toda su precisión**, conforme a la aclaración del
-usuario y a la nota U42 «sin redondeo por la conversión». Esta decisión
-sustituye la regla anterior de cuatro decimales. El libro contiene una
-diferencia interna: L41 utiliza Z42, una tasa total capturada a cuatro
-decimales porcentuales, en lugar de la conversión completa X41+Y41.
-Con los datos de ese bloque, la precisión completa produce **4,110,224.30**;
-con la tasa capturada `10.1317 %`, L41 produce **4,110,238.86**. La calculadora
-aplica la precisión completa solicitada, sin forzar el importe de Z42.
 
 ### Tasa equivalente sobre tasa total
 
@@ -216,18 +196,6 @@ registrado se conserva; el capital de cálculo sólo crece dentro del método
 compuesto. Cambiar el método, el alcance o el spread reutiliza las tasas originales
 consultadas. Los importes se actualizan al pulsar **Calcular interés y vencimiento**.
 En captura manual y **Sin revisión** se conserva el interés simple.
-
-Regresiones incluidas en `tests/test_normativa.py`:
-
-| Referencia en Cálculo de Interés | Método | Interés |
-| --- | --- | ---: |
-| T5 | Simple | 26,332.95 |
-| T6 | Simple | 369,859.14 |
-| U23:U25 | Compuesta, base + spread | 7,733,389.12 |
-| U27 | Equivalente sobre total | 7,733,389.20 |
-| L32 / Z33 | Equivalente sobre base, conversión completa | 98,364.33 |
-| L51 | Equivalente sobre total | 2,281,351.86 |
-| U55:U57 | Compuesta, base + spread | 2,281,351.86 |
 
 Los valores TERM SOFR del ejemplo se utilizan como datos fijos para verificar
 la fórmula; no se incorpora una conexión a CME.
