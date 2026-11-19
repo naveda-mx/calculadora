@@ -7,10 +7,16 @@ import pandas as pd
 import streamlit as st
 
 from banxico import TASAS_BANXICO, CONVENCIONES_FECHA, ErrorBanxico, consultar_tasa, consultar_tasas
-from calendario import (CALENDARIOS_MX, FUENTES_CALENDARIO, fecha_consulta,
+from calendario import (CALENDARIOS_MX, FUENTES_CALENDARIO, CALENDARIO_SOFR, CALENDARIOS_SOFR,
+                        FUENTE_CALENDARIO_SOFR, AVISOS_CALENDARIO_SOFR, fecha_consulta,
                         MODOS_RECALCULO, AJUSTES_HABILES, resolver_fechas)
 from calculos import METODOS_CALCULO, calcular_vencimiento, calcular_vencimiento_por_tramos
+from sofr import SERIE_SOFR, ErrorSOFR, consultar_sofr
 from tramos import FRECUENCIAS, MODOS_DIARIOS, CAPITALIZAR_SOBRE, generar_tramos, componer_condiciones, mostrar_decimal_exacto
+
+
+TASAS = {"manual": "Captura manual", **TASAS_BANXICO, SERIE_SOFR: "SOFR diaria (Fed de Nueva York)"}
+CALENDARIOS = {"Bancario de México": CALENDARIOS_MX, CALENDARIO_SOFR: CALENDARIOS_SOFR}
 
 
 @st.cache_data(ttl=3600, max_entries=512, show_spinner=False)
@@ -21,6 +27,11 @@ def consultar_con_cache(serie_id, fecha, token):
 @st.cache_data(ttl=3600, max_entries=128, show_spinner=False)
 def consultar_rango_con_cache(serie_id, fechas, token):
     return consultar_tasas(serie_id, fechas, token)
+
+
+@st.cache_data(ttl=3600, max_entries=128, show_spinner=False)
+def consultar_sofr_con_cache(fechas):
+    return consultar_sofr(fechas)
 
 
 def token_banxico():
@@ -40,7 +51,7 @@ def token_banxico():
 
 
 def recuperar_captura(clave):
-    """Restaura controles ocultados al cambiar entre Banxico y captura manual."""
+    """Restaura los controles ocultados al cambiar de opción."""
     copia = "borrador_" + clave
     if clave not in st.session_state and copia in st.session_state:
         st.session_state[clave] = deepcopy(st.session_state[copia])
@@ -50,29 +61,42 @@ def conservar_captura(clave):
     st.session_state["borrador_" + clave] = deepcopy(st.session_state[clave])
 
 
-def seleccionar_calendario():
+def seleccionar_calendario(es_sofr):
     izquierda, derecha = st.columns(2)
+    clave_calendario = "calendario_sofr" if es_sofr else "calendario"
+    clave_semana = "dias_semana_sofr" if es_sofr else "dias_semana"
+    opciones = ["Bancario de México", "Personalizado"]
+    if es_sofr:
+        opciones.insert(0, CALENDARIO_SOFR)
     with izquierda:
-        recuperar_captura("calendario")
-        calendario = st.selectbox("Calendario de días inhábiles", ["Bancario de México", "Personalizado"], key="calendario")
-        conservar_captura("calendario")
+        recuperar_captura(clave_calendario)
+        calendario = st.selectbox("Calendario de pago" if es_sofr else "Calendario de días inhábiles",
+                                  opciones, key=clave_calendario)
+        conservar_captura(clave_calendario)
     with derecha:
         nombres = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
-        recuperar_captura("dias_semana")
-        if "dias_semana" not in st.session_state:
-            st.session_state["dias_semana"] = [5, 6]
+        recuperar_captura(clave_semana)
+        if clave_semana not in st.session_state:
+            st.session_state[clave_semana] = [5, 6]
         dias = st.multiselect("Días de la semana inhábiles", list(range(7)),
                              default=None,
-                             format_func=lambda d: nombres[d], key="dias_semana")
-        conservar_captura("dias_semana")
-    inicial = sorted(f for fechas in CALENDARIOS_MX.values() for f in fechas) if calendario == "Bancario de México" else []
+                             format_func=lambda d: nombres[d], key=clave_semana)
+        conservar_captura(clave_semana)
+    inicial = sorted(f for fechas in CALENDARIOS.get(calendario, {}).values() for f in fechas)
     with st.expander("Editar fechas inhábiles"):
         if calendario == "Bancario de México":
             st.caption("Calendario bancario precargado para " + ", ".join(map(str, sorted(CALENDARIOS_MX))) + ". Fechas editables.")
             st.markdown(" · ".join(f"[Fuente {anio}]({url})" for anio, url in FUENTES_CALENDARIO.items()))
+            clave = "festivos_mx"
+        elif calendario == CALENDARIO_SOFR:
+            st.caption(f"Calendario SOFR precargado de {min(CALENDARIOS_SOFR)} a {max(CALENDARIOS_SOFR)}. "
+                       "Las ediciones aquí se aplican al ajuste de pago.")
+            st.markdown(f"[Calendario SIFMA]({FUENTE_CALENDARIO_SOFR}) · [Avisos de la Fed de Nueva York]({AVISOS_CALENDARIO_SOFR})")
+            clave = "festivos_sofr"
         else:
-            st.caption("Agrega los festivos de todos los años de las consultas y del ajuste del vencimiento.")
-        clave = "festivos_mx" if calendario == "Bancario de México" else "festivos_personalizados"
+            st.caption("Agrega los festivos de todos los años del ajuste de pago." if es_sofr else
+                       "Agrega los festivos de todos los años de las consultas y del ajuste del vencimiento.")
+            clave = "festivos_pago_sofr_personalizados" if es_sofr else "festivos_personalizados"
         base = "base_" + clave
         if clave not in st.session_state:
             st.session_state[base] = st.session_state.get(
@@ -87,11 +111,15 @@ def seleccionar_calendario():
 
 
 def verificar_cobertura(calendario, inicial, final):
-    if calendario == "Bancario de México":
-        faltan = set(range(inicial.year, final.year + 1)) - set(CALENDARIOS_MX)
-        if faltan:
-            raise ValueError("No hay calendario bancario precargado para " + ", ".join(map(str, sorted(faltan)))
-                             + ". Selecciona Personalizado y captura sus fechas inhábiles.")
+    if calendario not in CALENDARIOS:
+        return
+    faltan = set(range(inicial.year, final.year + 1)) - CALENDARIOS[calendario].keys()
+    if faltan:
+        anios = ", ".join(map(str, sorted(faltan)))
+        if calendario == CALENDARIO_SOFR:
+            raise ValueError(f"El calendario del mercado SOFR no tiene cobertura para {anios}.")
+        raise ValueError(f"No hay calendario bancario precargado para {anios}. "
+                         "Selecciona Personalizado y captura sus fechas inhábiles.")
 
 
 st.set_page_config(page_title="Calculadora de intereses", layout="wide")
@@ -184,13 +212,16 @@ with st.container():
     with izquierda:
         serie_id = st.selectbox(
             "Tasa",
-            options=["manual", *TASAS_BANXICO],
-            format_func=lambda codigo: "Captura manual" if codigo == "manual" else TASAS_BANXICO[codigo],
+            options=list(TASAS),
+            format_func=TASAS.__getitem__,
             key="serie_id",
         )
-    es_banxico = serie_id != "manual"
+    es_banxico = serie_id in TASAS_BANXICO
+    es_sofr = serie_id == SERIE_SOFR
+    es_automatica = es_banxico or es_sofr
+    fuente = "Fed de Nueva York" if es_sofr else "Banxico SIE"
     with centro:
-        if not es_banxico:
+        if not es_automatica:
             recuperar_captura("tasa_base")
             tasa_base = st.number_input(
                 "Tasa base anual (%) *", value=None, step=0.0001,
@@ -203,19 +234,19 @@ with st.container():
     with derecha:
         lookback = st.number_input(
             "Lookback (días hábiles)", min_value=0, max_value=365,
-            value=0, step=1, key="lookback", disabled=not es_banxico,
-            help="Días hábiles que se retrocede desde la fecha de referencia para consultar la tasa.",
+            value=0, step=1, key="lookback", disabled=not es_automatica,
+            help=("Días hábiles del mercado de SOFR que se retroceden desde cada revisión para buscar la fecha de valor."
+                  if es_sofr else "Días hábiles que se retrocede desde la fecha de referencia para consultar la tasa."),
         )
 
     configuracion = None
     fecha_tasa = None
     error_calendario = None
-    por_tramos = False
     tramos = []
     fechas_consulta = []
     modo_diario = None
-    es_diaria = False
-    frecuencia = "Sin revisión"
+    frecuencia = "Diaria" if es_sofr else "Sin revisión"
+    dia_revision = None
     fecha_referencia = fecha_inicio
     capitalizar_sobre = CAPITALIZAR_SOBRE[0]
     metodo_calculo = "Interés simple"
@@ -232,42 +263,51 @@ with st.container():
             "Frecuencia de revisión", [*FRECUENCIAS, "Sin revisión"], key="frecuencia",
         )
         conservar_captura("frecuencia")
-        por_tramos = frecuencia != "Sin revisión"
-        es_diaria = frecuencia == "Diaria"
         recuperar_captura("dia_revision")
         dia_revision = derecha.number_input(
             "Día de revisión", min_value=1, max_value=31, value=15, step=1,
-            key="dia_revision", disabled=not por_tramos or es_diaria,
+            key="dia_revision", disabled=frecuencia in ("Sin revisión", "Diaria"),
         )
         conservar_captura("dia_revision")
-        if por_tramos:
-            recuperar_captura("metodo_calculo")
-            metodo_calculo = st.selectbox(
-                "Método de cálculo", METODOS_CALCULO, key="metodo_calculo",
-                help="Equivalente: producto de factores. Compuesta: capital e intereses previos redondeados. "
-                     "Simple: cada tramo usa el saldo original, sin capitalizar.",
-            )
-            conservar_captura("metodo_calculo")
-        recuperar_captura("capitalizar_sobre")
-        capitalizar_sobre = st.selectbox(
-            "Capitalizar sobre", CAPITALIZAR_SOBRE, key="capitalizar_sobre",
-            disabled=not por_tramos or metodo_calculo == "Interés simple",
-            help="Sólo tasa base: el spread queda fuera de la capitalización. Tasa base + spread: ambos se capitalizan. "
-                 "No aplica al interés simple.",
+    if es_sofr:
+        modo_diario = MODOS_DIARIOS[1]
+        st.caption(
+            "La SOFR se revisa en cada día hábil de su mercado. El tramo conserva esa tasa hasta la siguiente revisión, "
+            "incluidos los días inhábiles intermedios. El lookback desplaza la fecha de la tasa."
         )
-        conservar_captura("capitalizar_sobre")
-        if por_tramos:
-            recuperar_captura("decimales_tasa")
-            decimales_tasa = st.number_input(
-                "Decimales de la tasa anual equivalente (%)", min_value=0, max_value=10,
-                value=4, step=1, key="decimales_tasa", disabled=metodo_calculo != "Tasa equivalente",
-                help="Se redondea el porcentaje anual final antes de sumar el spread, sin redondear factores. "
-                     "Ejemplo: 5 decimales aplica 6.52253 %. Si la tasa incluye spread dentro de los factores, "
-                     "el equivalente anual es informativo y este selector no cambia el importe.",
+    por_tramos = frecuencia != "Sin revisión"
+    es_diaria = frecuencia == "Diaria"
+    if es_automatica:
+        controles = st.expander("Método de cálculo y redondeo") if es_sofr else st.container()
+        with controles:
+            if por_tramos:
+                recuperar_captura("metodo_calculo")
+                metodo_calculo = st.selectbox(
+                    "Método de cálculo", METODOS_CALCULO, key="metodo_calculo",
+                    help="Equivalente: producto de factores. Compuesta: capital e intereses previos redondeados. "
+                         "Simple: cada tramo usa el saldo original, sin capitalizar.",
+                )
+                conservar_captura("metodo_calculo")
+            recuperar_captura("capitalizar_sobre")
+            capitalizar_sobre = st.selectbox(
+                "Capitalizar sobre", CAPITALIZAR_SOBRE, key="capitalizar_sobre",
+                disabled=not por_tramos or metodo_calculo == "Interés simple",
+                help="Sólo tasa base: el spread queda fuera de la capitalización. Tasa base + spread: ambos se capitalizan. "
+                     "No aplica al interés simple.",
             )
-            conservar_captura("decimales_tasa")
+            conservar_captura("capitalizar_sobre")
+            if por_tramos:
+                recuperar_captura("decimales_tasa")
+                decimales_tasa = st.number_input(
+                    "Decimales de la tasa anual equivalente (%)", min_value=0, max_value=10,
+                    value=4, step=1, key="decimales_tasa", disabled=metodo_calculo != "Tasa equivalente",
+                    help="Se redondea el porcentaje anual final antes de sumar el spread, sin redondear factores. "
+                         "Ejemplo: 5 decimales aplica 6.52253 %. Si la tasa incluye spread dentro de los factores, "
+                         "el equivalente anual es informativo y este selector no cambia el importe.",
+                )
+                conservar_captura("decimales_tasa")
+    if es_banxico:
         if por_tramos:
-            fecha_referencia = fecha_inicio
             if es_diaria:
                 recuperar_captura("modo_diario")
                 modo_diario = st.selectbox(
@@ -302,7 +342,7 @@ with st.container():
     st.caption("Sin recálculo: se conserva el fin del período y sólo se mueve el pago. "
                "Con recálculo: se mueve también el fin del período y se recalculan los días e intereses. "
                "La fecha de inicio y las reglas de consulta con lookback se conservan.")
-    calendario, dias_semana, festivos = seleccionar_calendario()
+    calendario, dias_semana, festivos = seleccionar_calendario(es_sofr)
     fechas = None
     fin_calculo = fecha_fin
     if fecha_inicio is not None and fecha_fin is not None:
@@ -315,12 +355,19 @@ with st.container():
             error_calendario = str(error)
             st.warning(error_calendario)
 
-    if es_banxico:
-        if fecha_referencia is not None and error_calendario is None:
+    if es_automatica:
+        listo_para_consultar = fecha_referencia is not None and (not por_tramos or fin_calculo is not None)
+        if listo_para_consultar and error_calendario is None:
             try:
+                dias_tasa, festivos_tasa = dias_semana, festivos
+                calendario_tasa = calendario
+                if es_sofr:
+                    calendario_tasa = CALENDARIO_SOFR
+                    dias_tasa = (5, 6)
+                    festivos_tasa = tuple(f for cierres in CALENDARIOS_SOFR.values() for f in cierres)
                 if por_tramos:
                     tramos = generar_tramos(
-                        fecha_inicio, fin_calculo, frecuencia, dia_revision, lookback, dias_semana, festivos,
+                        fecha_inicio, fin_calculo, frecuencia, dia_revision, lookback, dias_tasa, festivos_tasa,
                         modo_diario=modo_diario,
                     )
                     fechas_consulta = list(dict.fromkeys(t.consulta for t in tramos))
@@ -333,47 +380,55 @@ with st.container():
                     fecha_tasa = fecha_consulta(fecha_referencia, lookback, dias_semana, festivos)
                     fechas_consulta = [fecha_tasa]
                     ultima_referencia = fecha_referencia
-                verificar_cobertura(calendario, min(fechas_consulta), ultima_referencia)
+                verificar_cobertura(calendario_tasa, min(fechas_consulta), ultima_referencia)
                 configuracion = (
                     serie_id, fecha_referencia, lookback, tuple(sorted(dias_semana)),
                     festivos, calendario, tuple(fechas_consulta), frecuencia,
                     dia_revision if por_tramos and not es_diaria else None,
                     fin_calculo if por_tramos else None, modo_diario if es_diaria else None,
-                    modo_recalculo, ajuste_vencimiento, fecha_fin, "tasa_anual_4_decimales",
+                    modo_recalculo, ajuste_vencimiento, fecha_fin,
                 )
                 if por_tramos:
                     st.info(f"{len(tramos)} tramos · {(fin_calculo - fecha_inicio).days} días naturales.")
                     with st.expander("Ver fechas de revisión y consulta"):
+                        etiqueta_consulta = "Fecha de valor SOFR con lookback" if es_sofr else "Consulta con lookback"
                         st.table([{
                             "Inicio": t.inicio.strftime("%d/%m/%Y"),
                             "Final": t.fin.strftime("%d/%m/%Y"), "Días": t.dias,
                             "Revisión": t.referencia.strftime("%d/%m/%Y"),
-                            "Consulta con lookback": t.consulta.strftime("%d/%m/%Y"),
+                            etiqueta_consulta: t.consulta.strftime("%d/%m/%Y"),
                         } for t in tramos])
                 else:
                     st.info(f"Fecha de tasa a consultar: {fecha_tasa:%d/%m/%Y}.")
             except ValueError as error:
                 error_calendario = str(error)
                 st.warning(error_calendario)
-        elif fecha_referencia is None:
-            error_calendario = "Captura la fecha de inicio o una fecha de referencia para consultar Banxico."
+        elif not listo_para_consultar and error_calendario is None:
+            error_calendario = ("Captura las fechas de inicio y fin para calcular los tramos." if por_tramos else
+                                "Captura la fecha de inicio o una fecha de referencia para consultar Banxico.")
             st.info(error_calendario)
-        st.caption(
-            "Si la referencia es inhábil, primero se lleva al hábil anterior y después se resta el lookback. "
-            "El ajuste del vencimiento se controla por separado mediante la opción de recálculo. "
-            "La frecuencia de revisión determina los cortes entre tramos. "
-            "La fecha consultada corresponde a la fecha de la serie SIE."
-        )
-        st.caption(CONVENCIONES_FECHA[serie_id])
+        if es_sofr:
+            st.caption(
+                "El lookback se cuenta con el calendario del mercado SOFR de EE. UU. "
+                "La Fed de Nueva York suele publicar cada observación al hábil siguiente de su fecha de valor."
+            )
+        else:
+            st.caption(
+                "Si la referencia es inhábil, primero se lleva al hábil anterior y después se resta el lookback. "
+                "El ajuste del vencimiento se controla por separado mediante la opción de recálculo. "
+                "La frecuencia de revisión determina los cortes entre tramos. "
+                "La fecha consultada corresponde a la fecha de la serie SIE."
+            )
+            st.caption(CONVENCIONES_FECHA[serie_id])
 
     # Una tasa consultada sólo puede reutilizarse con las mismas condiciones y durante una hora.
-    registro = st.session_state.get("consulta_banxico")
+    registro = st.session_state.get("consulta_tasas")
     if registro and (
         registro["configuracion"] != configuracion
         or any((datetime.now(timezone.utc) - o.consultada_en).total_seconds() >= 3600
                for o in registro["observaciones"].values())
     ):
-        st.session_state.pop("consulta_banxico", None)
+        st.session_state.pop("consulta_tasas", None)
 
     st.caption("Base mixta: días naturales del período / 360. Se incluye el inicio y se excluye el final. "
                "La amortización se aplica en el vencimiento final.")
@@ -390,47 +445,53 @@ with st.container():
                    "se multiplica el saldo por el rendimiento acumulado y se redondea a centavos al final.")
     st.caption("* Campos obligatorios para calcular.")
     acciones = st.columns(2)
-    consultar = acciones[0].button("Consultar / actualizar tasa Banxico", disabled=not es_banxico)
+    consultar = acciones[0].button("Consultar / actualizar tasa SOFR" if es_sofr else "Consultar / actualizar tasa Banxico",
+                                  disabled=not es_automatica)
     revisar = acciones[1].button("Calcular interés y vencimiento", type="primary")
 
 obligatorios = {
     "saldo insoluto": saldo_insoluto, "spread": spread,
     "fecha de inicio": fecha_inicio, "fecha final": fecha_fin, "amortización": amortizacion,
 }
-if not es_banxico:
+if not es_automatica:
     obligatorios["tasa base"] = tasa_base
 faltantes = [nombre for nombre, valor in obligatorios.items() if valor is None]
 
-if es_banxico and (consultar or (revisar and not faltantes)):
+if es_automatica and (consultar or (revisar and not faltantes)):
     try:
         if error_calendario:
             raise ValueError(error_calendario)
         if consultar:
-            st.session_state.pop("consulta_banxico", None)
-        if consultar or "consulta_banxico" not in st.session_state:
-            token = token_banxico()
+            st.session_state.pop("consulta_tasas", None)
+        if "consulta_tasas" not in st.session_state:
             observaciones = {}
-            with st.spinner("Consultando las tasas en Banxico…"):
-                if es_diaria:
+            with st.spinner(f"Consultando las tasas en {fuente}…"):
+                if es_sofr:
                     fechas_lote = tuple(sorted(fechas_consulta))
                     if consultar:
-                        consultar_rango_con_cache.clear(serie_id, fechas_lote, token)
-                    observaciones = consultar_rango_con_cache(serie_id, fechas_lote, token)
+                        consultar_sofr_con_cache.clear(fechas_lote)
+                    observaciones = consultar_sofr_con_cache(fechas_lote)
                 else:
-                    for fecha in fechas_consulta:
+                    token = token_banxico()
+                    if es_diaria:
+                        fechas_lote = tuple(sorted(fechas_consulta))
                         if consultar:
-                            consultar_con_cache.clear(serie_id, fecha, token)
-                        observaciones[fecha] = consultar_con_cache(serie_id, fecha, token)
-                # Guardamos sólo tasas originales: la composición se rehace con
-                # la opción de capitalización y el spread actuales, sin otra descarga.
-            st.session_state["consulta_banxico"] = {
+                            consultar_rango_con_cache.clear(serie_id, fechas_lote, token)
+                        observaciones = consultar_rango_con_cache(serie_id, fechas_lote, token)
+                    else:
+                        for fecha in fechas_consulta:
+                            if consultar:
+                                consultar_con_cache.clear(serie_id, fecha, token)
+                            observaciones[fecha] = consultar_con_cache(serie_id, fecha, token)
+            # Conservamos las tasas originales para aplicar las condiciones de cada cálculo.
+            st.session_state["consulta_tasas"] = {
                 "configuracion": configuracion, "observaciones": observaciones,
             }
-    except (ValueError, ErrorBanxico) as error:
-        st.session_state.pop("consulta_banxico", None)
+    except (ValueError, ErrorBanxico, ErrorSOFR) as error:
+        st.session_state.pop("consulta_tasas", None)
         st.warning(str(error))
 
-registro = st.session_state.get("consulta_banxico") if es_banxico else None
+registro = st.session_state.get("consulta_tasas") if es_automatica else None
 compuesto = None
 alcance = CAPITALIZAR_SOBRE[0] if metodo_calculo == "Interés simple" else capitalizar_sobre
 if registro and por_tramos and (spread is not None or alcance == CAPITALIZAR_SOBRE[0]):
@@ -441,7 +502,7 @@ if registro and por_tramos and (spread is not None or alcance == CAPITALIZAR_SOB
         )
     except (ValueError, InvalidOperation) as error:
         st.warning(str(error))
-if es_banxico:
+if es_automatica:
     if registro:
         if por_tramos and compuesto is not None:
             tasa_base = compuesto["tasa_equivalente"]
@@ -456,7 +517,7 @@ if es_banxico:
                 "Final": fila["tramo"].fin.strftime("%d/%m/%Y"),
                 "Días": fila["tramo"].dias,
                 "Revisión": fila["tramo"].referencia.strftime("%d/%m/%Y"),
-                "Fecha de consulta": fila["tramo"].consulta.strftime("%d/%m/%Y"),
+                ("Fecha de valor SOFR" if es_sofr else "Fecha de consulta"): fila["tramo"].consulta.strftime("%d/%m/%Y"),
                 "Tasa base anual (%)": f"{fila['tasa_base']:.6f}",
             } for fila in compuesto["detalle"]]
             if metodo_calculo == "Tasa equivalente":
@@ -484,10 +545,10 @@ if es_banxico:
             else:
                 st.caption("Los tramos determinan dónde cambia la tasa y, para tasa compuesta, dónde se capitaliza. "
                            "No se utiliza una tasa anual equivalente para calcular los importes.")
-            st.caption(f"Fuente: Banxico SIE · Serie: {serie_id} · {TASAS_BANXICO[serie_id]}.")
-            with st.expander("Detalle de las consultas a Banxico"):
+            st.caption(f"Fuente: {fuente} · Serie: {serie_id} · {TASAS[serie_id]}.")
+            with st.expander("Detalle de las consultas a la Fed de Nueva York" if es_sofr else "Detalle de las consultas a Banxico"):
                 st.table([{
-                    "Fecha del dato": o.fecha.strftime("%d/%m/%Y"),
+                    ("Fecha de valor SOFR" if es_sofr else "Fecha del dato"): o.fecha.strftime("%d/%m/%Y"),
                     "Consulta (UTC)": o.consultada_en.strftime("%d/%m/%Y %H:%M"),
                 } for o in registro["observaciones"].values()])
         elif not por_tramos:
@@ -502,7 +563,7 @@ if es_banxico:
             indicador_tasa.info("Captura el spread para obtener el equivalente de tasa base más spread."
                                if spread is None else "Revisa las condiciones de composición indicadas en el aviso.")
     else:
-        indicador_tasa.info("Consulta Banxico o pulsa Calcular para obtener la tasa.")
+        indicador_tasa.info("Pulsa Consultar o Calcular para obtener la tasa.")
 
 if revisar:
     resultado = None
@@ -571,7 +632,7 @@ if revisar:
             ("Recálculo de intereses", modo_recalculo),
             ("Ajuste de vencimiento", ajuste_vencimiento),
             ("Días del período", str(resultado["dias"])),
-            ("Tasa de referencia", TASAS_BANXICO[serie_id] if es_banxico else "Captura manual"),
+            ("Tasa de referencia", TASAS[serie_id]),
             ("Método de cálculo", metodo_calculo),
             ("Decimales de la tasa anual equivalente (%)", str(decimales_tasa) if metodo_calculo == "Tasa equivalente" else "No aplica"),
             (etiqueta_tasa, valor_tasa),
@@ -585,16 +646,19 @@ if revisar:
             campos.append(("Interés diario redondeado", f"{resultado['interes_diario']:,.2f}"))
         if registro:
             campos.extend([
-                ("Fuente / serie", f"Banxico SIE / {serie_id}"),
+                ("Fuente / serie", f"{fuente} / {serie_id}"),
                 ("Fecha de referencia", fecha_referencia.strftime("%d/%m/%Y")),
                 ("Lookback hábil", str(lookback)),
                 ("Frecuencia de revisión", frecuencia),
                 ("Capitalizar sobre", alcance if por_tramos and metodo_calculo != "Interés simple" else "No aplica"),
                 ("Día de revisión", str(dia_revision) if por_tramos and not es_diaria else "No aplica"),
                 ("Calendario de revisión diaria", modo_diario if es_diaria else "No aplica"),
-                ("Fechas de la tasa SIE", ", ".join(f.strftime("%d/%m/%Y") for f in fechas_consulta)),
-                ("Calendario", calendario + " (con las fechas seleccionadas)"),
+                ("Fechas de valor SOFR" if es_sofr else "Fechas de la tasa SIE",
+                 ", ".join(f.strftime("%d/%m/%Y") for f in fechas_consulta)),
+                ("Calendario de pago" if es_sofr else "Calendario", calendario + " (con las fechas seleccionadas)"),
             ])
+            if es_sofr:
+                campos.append(("Calendario de revisión y lookback", CALENDARIO_SOFR))
 
         st.subheader("Resultado del último cálculo")
         unidad = f" {moneda.strip()}" if moneda.strip() else ""
